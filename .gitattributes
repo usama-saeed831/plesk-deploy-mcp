@@ -1,0 +1,6 @@
+# Shell scripts and the vendored kit must keep LF line endings on every OS,
+# or bash fails on a Windows checkout.
+* text=auto
+*.sh text eol=lf
+kit/** text eol=lf
+test/fixtures/bin/* text eol=lf

@@ -1,0 +1,9 @@
+# The vendored skill stays byte-identical to its source.
+kit/
+dist/
+build/
+coverage/
+node_modules/
+package-lock.json
+# Markdown is hand-formatted (wide tables).
+*.md

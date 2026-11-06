@@ -1,0 +1,42 @@
+# TEMPLATE — /etc/systemd/system/myapp-api.service, installed once by root
+# (not by each deploy). The release manager restarts it after switching
+# `current` (PROCESS_MANAGER=systemd, SYSTEMD_UNITS="myapp-api").
+#
+#   sudo install -m 644 myapp-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable myapp-api
+#
+# ADAPT: names, user, paths, the Node binary (the one the bundle is built for),
+# the start command, and the port in the env file.
+
+[Unit]
+Description=myapp API
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=myapp_sys
+Group=psacln
+WorkingDirectory=/var/www/myapp-app/current/api
+EnvironmentFile=/etc/myapp/app.env
+Environment=NODE_ENV=production
+ExecStart=/opt/plesk/node/24/bin/node dist/main.js
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+# Hardening that does not get in the way of a normal web app.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+# Folders the app writes to (uploads, logs), if any:
+# ReadWritePaths=/var/www/myapp-app/shared
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=myapp-api
+
+[Install]
+WantedBy=multi-user.target

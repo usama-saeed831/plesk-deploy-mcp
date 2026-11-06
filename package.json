@@ -1,0 +1,71 @@
+{
+  "name": "plesk-deploy-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for safe, approval-gated deployments to Plesk servers: inspect a project, generate and validate a deploy kit, and check status, logs and rollback over your own SSH.",
+  "mcpName": "io.github.usama-saeed831/plesk-deploy-mcp",
+  "type": "module",
+  "bin": {
+    "plesk-deploy-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "kit",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "SECURITY.md",
+    "PRIVACY.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node node_modules/typescript-7/bin/tsc -p tsconfig.build.json",
+    "typecheck": "node node_modules/typescript-7/bin/tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:release-manager": "bash kit/scripts/test-release-manager.sh",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mcp-server",
+    "plesk",
+    "deployment",
+    "github-actions",
+    "release-manager",
+    "rollback",
+    "pm2"
+  ],
+  "author": "Muhammad Usama Saeed",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/usama-saeed831/plesk-deploy-mcp.git"
+  },
+  "homepage": "https://github.com/usama-saeed831/plesk-deploy-mcp#readme",
+  "bugs": {
+    "url": "https://github.com/usama-saeed831/plesk-deploy-mcp/issues"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/server": "^2.4.0",
+    "diff": "^9.0.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@types/node": "^22.20.5",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.3",
+    "typescript-7": "npm:typescript@^7.0.2",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0"
+  }
+}
