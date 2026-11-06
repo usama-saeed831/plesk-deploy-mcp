@@ -48,6 +48,8 @@ describe('redact', () => {
     expectRedacted('*/5 * * * * DB_PASS=s3cr3t node /var/www/app/cron.js', 's3cr3t');
     expectRedacted('FTP password: pa55word', 'pa55word');
     expectRedacted('APP_KEY=base64:Zm9vYmFy', 'base64:Zm9vYmFy');
+    expectRedacted("MIGRATE_CMD='DB_PASSWORD=hunter2 npm run migrate'", 'hunter2');
+    expectRedacted('run "API_TOKEN=abc123 node x"', 'abc123');
     expectRedacted('DATABASE_URL=postgres://app:pw@127.0.0.1/app', 'pw@');
   });
 
@@ -87,6 +89,8 @@ describe('redact', () => {
       'JWT_SECRET=',
       'PLESK_SSH_KEY: ${{ secrets.PLESK_SSH_KEY }}',
       'SSH_KEY: $PLESK_SSH_KEY',
+      '    PGPASSWORD=$(value DB_PASSWORD) pg_dump -Fc --no-owner \\',
+      'MYSQL_PWD=$(value DB_PASSWORD) mysqldump --single-transaction',
       'HEALTH_CHECKS=\'http://127.0.0.1:3001/health/ready|"status":"ready"\'',
       'exec cwd │ /var/www/vhosts/example.com/httpdocs/backend',
       '/var/www/vhosts/system/example.com/conf/vhost_nginx.conf',

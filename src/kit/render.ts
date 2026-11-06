@@ -1,0 +1,504 @@
+/**
+ * Renders the deploy kit for a project from explicit, validated parameters.
+ *
+ * The vendored templates stay byte-identical to the skill. Rendering makes
+ * anchored substitutions: each one must find its anchor exactly once, or
+ * rendering fails (a template change is caught by the tests, never silently
+ * skipped). Values that aren't known are left empty and marked FILL IN, never
+ * guessed. Lines still marked ADAPT or FILL IN are reported to the user.
+ */
+import { readFileSync } from 'node:fs';
+import { kitPath } from '../kit.js';
+import { shQuote } from '../lib/quote.js';
+
+export type Stack = 'node' | 'next' | 'static' | 'laravel';
+export type ProcessManager = 'pm2' | 'systemd' | 'php-fpm' | 'none';
+export type KitPart =
+  | 'workflow'
+  | 'build'
+  | 'release-manager'
+  | 'deploy-conf'
+  | 'server-setup'
+  | 'db-backup'
+  | 'process'
+  | 'nginx'
+  | 'readme';
+
+export const KIT_PARTS: readonly KitPart[] = [
+  'workflow',
+  'build',
+  'release-manager',
+  'deploy-conf',
+  'server-setup',
+  'db-backup',
+  'process',
+  'nginx',
+  'readme',
+];
+
+export interface KitParams {
+  app: string;
+  stack: Stack;
+  process_manager: ProcessManager;
+  branch: string;
+  ci_workflow: string;
+  site_url: string;
+  public_health_url: string;
+  base_dir: string;
+  health_checks: { url: string; contains?: string }[];
+  health_commit_url?: string;
+  app_user?: string;
+  app_group?: string;
+  deploy_user?: string;
+  node_bin_dir?: string;
+  pm2_home?: string;
+  pm2_apps?: { name: string; dir: string; script: string; args?: string }[];
+  systemd_units?: { name: string; dir: string; script: string }[];
+  php_fpm_service?: string;
+  php_version?: string;
+  env_file?: string;
+  shared_links?: { path: string; target: string }[];
+  required_files?: string[];
+  database: 'postgres' | 'mysql' | 'none';
+  migrate_cmd?: string;
+  post_switch_cmd?: string;
+  build_time_vars: string[];
+  runtime_env_names: string[];
+  not_deployed_paths: string[];
+  static_dir?: string;
+  checkout_env?: string;
+  checkout_uploads?: string;
+  nginx: 'none' | 'proxy' | 'spa';
+  proxy_port?: number;
+  parts?: KitPart[];
+}
+
+export interface RenderedFile {
+  /** Path relative to the project root. */
+  path: string;
+  content: string;
+  /** File mode to write. */
+  mode: number;
+  /** The kit template it came from (for a diff against the vetted original). */
+  template?: string;
+  part: KitPart;
+}
+
+const FILL = '# FILL IN from the server discovery output';
+
+const template = (file: string) => readFileSync(kitPath('templates', file), 'utf8');
+
+/** Replace exactly one occurrence of an anchor, or fail loudly. */
+function sub(text: string, anchor: RegExp | string, replacement: string, file: string): string {
+  const re = typeof anchor === 'string' ? new RegExp(escapeRegExp(anchor), 'g') : new RegExp(anchor.source, anchor.flags.includes('g') ? anchor.flags : anchor.flags + 'g');
+  const count = [...text.matchAll(re)].length;
+  if (count !== 1) {
+    throw new Error(`Template ${file} has changed: expected one match for ${String(anchor)}, found ${count}.`);
+  }
+  return text.replace(re, () => replacement);
+}
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+export const deployUser = (p: KitParams) => p.deploy_user ?? `${p.app}-deploy`;
+export const envFile = (p: KitParams) => p.env_file ?? `/etc/${p.app}/app.env`;
+const backupDir = (p: KitParams) => `/var/backups/${p.app}`;
+const underCurrent = (base: string, dir: string) => (dir === '.' ? `${base}/current` : `${base}/current/${dir}`);
+const healthChecks = (p: KitParams) =>
+  p.health_checks.map((h) => (h.contains ? `${h.url}|${h.contains}` : h.url)).join(' ');
+
+function defaultSharedLinks(p: KitParams): string | undefined {
+  if (p.shared_links?.length) return p.shared_links.map((l) => `${l.path}=${l.target}`).join(' ');
+  if (p.stack === 'laravel') return `.env=${envFile(p)} storage=${p.base_dir}/shared/storage`;
+  if (p.stack === 'node' || p.stack === 'next') return `.env=${envFile(p)}`;
+  return undefined;
+}
+
+function defaultRequiredFiles(p: KitParams): string {
+  if (p.required_files?.length) return ['RELEASE.txt', ...p.required_files.filter((f) => f !== 'RELEASE.txt')].join(' ');
+  const pm2 = p.process_manager === 'pm2' ? ['ecosystem.config.js'] : [];
+  switch (p.stack) {
+    case 'node':
+      return ['RELEASE.txt', ...pm2, 'package.json', 'dist'].join(' ');
+    case 'next':
+      return ['RELEASE.txt', ...pm2, 'package.json', '.next/BUILD_ID'].join(' ');
+    case 'static':
+      return 'RELEASE.txt index.html version.json';
+    case 'laravel':
+      return 'RELEASE.txt artisan vendor/autoload.php public/index.php';
+  }
+}
+
+// ── .github/workflows/deploy-plesk.yml ─────────────────────────────────────
+
+function renderWorkflow(p: KitParams): string {
+  const f = 'github/deploy-plesk.yml';
+  let t = template(f);
+  t = sub(
+    t,
+    /^# TEMPLATE — adapt every line marked ADAPT, delete what the project does not use\.$/m,
+    '# Generated by plesk-deploy-mcp from the plesk-deploy workflow. Review it before committing.',
+    f,
+  );
+  t = sub(t, /^ {4}branches: \[main\] .*$/m, `    branches: [${p.branch}]`, f);
+  t = sub(t, '(empty: the newest main)', `(empty: the newest ${p.branch})`, f);
+  t = sub(
+    t,
+    /^ {2}# ADAPT: the existing CI made callable \(templates\/github\/ci-callable\.md\)\.$/m,
+    `  # The existing CI (${p.ci_workflow}), callable through workflow_call.`,
+    f,
+  );
+  t = sub(t, '    uses: ./.github/workflows/ci.yml', `    uses: ./.github/workflows/${p.ci_workflow}`, f);
+
+  const checkStep =
+    /^ {6}# ADAPT: one line per build-time setting the bundle needs \(repository variables\)\.\n[\s\S]*?\n {10}fi\n\n/m;
+  if (p.build_time_vars.length === 0) {
+    t = sub(t, checkStep, '', f);
+  } else {
+    const checks = p.build_time_vars
+      .map((v) => `          [ -n "\${{ vars.${v} }}" ] || missing="$missing ${v}"`)
+      .join('\n');
+    t = sub(t, /^ {6}# ADAPT: one line per build-time setting the bundle needs \(repository variables\)\.\n/m, '', f);
+    t = sub(t, /^ {10}\[ -n "\$\{\{ vars\.PUBLIC_API_URL \}\}" \] \|\| missing="\$missing PUBLIC_API_URL"$/m, checks, f);
+  }
+
+  const notDeployed = p.not_deployed_paths.map((x) => escapeRegExp(x)).join('|');
+  t = sub(t, /^ {10}# ADAPT: paths that never affect production\.\n/m, '          # Paths that never affect production: tested, not deployed.\n', f);
+  t = sub(
+    t,
+    "grep -vqE '^(docs/|mobile/)|\\.md$'",
+    `grep -vqE '${notDeployed ? `^(${notDeployed})|` : ''}\\.md$'`,
+    f,
+  );
+
+  const runtimeAdapt =
+    /^ {6}# ADAPT: the runtime the server runs\. Node shown; for PHP use\n {6}# shivammathur\/setup-php@v2 with the domain's PHP version \(and Node too if\n {6}# assets are built\)\.\n/m;
+  if (p.stack === 'laravel') {
+    t = sub(
+      t,
+      runtimeAdapt,
+      [
+        "      # The domain's PHP version (major.minor), as the server runs it.",
+        '      - uses: shivammathur/setup-php@v2',
+        "        if: steps.changes.outputs.deployable == 'true'",
+        '        with:',
+        `          php-version: '${p.php_version ?? '8.3'}'${p.php_version ? '' : '   # FILL IN: the domain’s PHP version'}`,
+        '          tools: composer:v2',
+        '      # Node builds the front-end assets (Vite).',
+        '',
+      ].join('\n'),
+      f,
+    );
+  } else {
+    t = sub(t, runtimeAdapt, "      # The Node major the server runs, pinned in .nvmrc.\n", f);
+  }
+
+  const envLines = p.build_time_vars.map((v) => `          ${v}: \${{ vars.${v} }}`);
+  t = sub(t, /^ {10}PUBLIC_API_URL: \$\{\{ vars\.PUBLIC_API_URL \}\} +# ADAPT\n/m, envLines.length ? `${envLines.join('\n')}\n` : '', f);
+  t = sub(t, /^ {6}url: https:\/\/example\.com +# ADAPT$/m, `      url: ${p.site_url}`, f);
+  t = sub(t, /^ {6}RELEASE_MANAGER: \/usr\/local\/bin\/myapp-deploy +# ADAPT$/m, `      RELEASE_MANAGER: /usr/local/bin/${p.app}-deploy`, f);
+  t = sub(
+    t,
+    /^ {6}PUBLIC_HEALTH_URL: https:\/\/api\.example\.com\/health +# ADAPT: .*$/m,
+    `      PUBLIC_HEALTH_URL: ${p.public_health_url}   # must answer with the commit`,
+    f,
+  );
+  t = sub(t, /^ {6}PUBLIC_SITE_URL: https:\/\/example\.com\/ +# ADAPT$/m, `      PUBLIC_SITE_URL: ${p.site_url}`, f);
+  return t;
+}
+
+// ── deploy/plesk/build-bundle.sh ───────────────────────────────────────────
+
+function renderBuild(p: KitParams): string {
+  const f = 'build/build-bundle.sh';
+  let t = template(f);
+  t = sub(t, '# TEMPLATE — build-bundle.sh:', '# build-bundle.sh:', f);
+  t = sub(t, 'STACK=node|next|static|laravel APP_NAME=myapp [build-time values]', `STACK=node|next|static|laravel APP_NAME=${p.app} [build-time values]`, f);
+  t = sub(t, /^APP_NAME=\$\{APP_NAME:-myapp\} +# ADAPT$/m, `APP_NAME=\${APP_NAME:-${p.app}}`, f);
+  t = sub(t, /^STACK=\$\{STACK:-node\} +# ADAPT$/m, `STACK=\${STACK:-${p.stack}}`, f);
+  if (p.static_dir) {
+    t = sub(t, /^STATIC_DIR=\$\{STATIC_DIR:-dist\}/m, `STATIC_DIR=\${STATIC_DIR:-${p.static_dir}}`, f);
+  }
+  const checks = p.build_time_vars.map((v) => `: "\${${v}:?Set the repository variable ${v}}"`);
+  t = sub(
+    t,
+    /^# ADAPT: build-time values the build needs; fail early with where to set them\.\n# : "\$\{PUBLIC_API_URL:\?Set the repository variable PUBLIC_API_URL\}"$/m,
+    checks.length
+      ? `# Build-time values the build needs (repository variables); it fails early, naming the missing one.\n${checks.join('\n')}`
+      : '# This build needs no build-time values.',
+    f,
+  );
+  return t;
+}
+
+// ── deploy/plesk/deploy.conf.example ───────────────────────────────────────
+
+function renderDeployConf(p: KitParams): string {
+  const f = 'server/deploy.conf.example';
+  let t = template(f);
+  t = sub(
+    t,
+    /^# TEMPLATE: every value below is an example\. Fill each one from what the server\n# shows \(references\/discovery\.md\), not from what seems likely\./m,
+    `# Generated for ${p.app} by plesk-deploy-mcp. A value marked FILL IN is unknown:\n# take it from what the server shows (references/discovery.md), never from a guess.`,
+    f,
+  );
+  const known = (v: string | undefined) => (v ? shQuote(v) : undefined);
+  const pm = p.process_manager;
+  const values: Record<string, string | undefined | null> = {
+    BASE: known(p.base_dir),
+    APP_USER: known(p.app_user),
+    APP_GROUP: known(p.app_group),
+    DEPLOY_USER: known(deployUser(p)),
+    INCOMING: known(`/home/${deployUser(p)}/incoming`),
+    PROCESS_MANAGER: pm,
+    NODE_BIN_DIR: p.stack === 'static' || p.stack === 'laravel' ? (known(p.node_bin_dir) ?? null) : known(p.node_bin_dir),
+    PM2_HOME: pm === 'pm2' ? known(p.pm2_home) : null,
+    PM2_APPS: pm === 'pm2' ? known(p.pm2_apps?.map((a) => `${a.name}=${a.dir}`).join(' ')) : null,
+    SYSTEMD_UNITS: pm === 'systemd' ? known(p.systemd_units?.map((u) => u.name).join(' ')) : null,
+    PHP_FPM_SERVICE: pm === 'php-fpm' ? known(p.php_fpm_service) : null,
+    ENV_FILE: known(envFile(p)),
+    SHARED_DIR: known(`${p.base_dir}/shared`),
+    SHARED_LINKS: defaultSharedLinks(p) !== undefined ? shQuote(defaultSharedLinks(p)!) : null,
+    REQUIRED_FILES: shQuote(defaultRequiredFiles(p)),
+    BACKUP_DIR: known(backupDir(p)),
+    PRE_MIGRATE_CMD: p.database !== 'none' ? shQuote(`/usr/local/bin/${p.app}-db-backup`) : null,
+    MIGRATE_CMD: p.migrate_cmd ? shQuote(p.migrate_cmd) : null,
+    POST_SWITCH_CMD: p.post_switch_cmd ? shQuote(p.post_switch_cmd) : null,
+    HEALTH_CHECKS: shQuote(healthChecks(p)),
+    HEALTH_COMMIT_URL: p.health_commit_url ? shQuote(p.health_commit_url) : null,
+    LOG_FILE: shQuote(`/var/log/${p.app}-deploy.log`),
+    LOCK_FILE: shQuote(`/var/lock/${p.app}-deploy.lock`),
+  };
+  for (const [key, value] of Object.entries(values)) {
+    // undefined: needed but unknown → empty + FILL IN; null: not used → empty.
+    const line = value === undefined ? `${key}=   ${FILL}` : value === null ? `${key}=` : `${key}=${value}`;
+    t = sub(t, new RegExp(`^${key}=.*$`, 'm'), line, f);
+  }
+  if (p.database !== 'none') {
+    const backupLine = `BACKUP_DIR=${shQuote(backupDir(p))}`;
+    t = sub(
+      t,
+      new RegExp(`^${escapeRegExp(backupLine)}$`, 'm'),
+      `${backupLine}\n# The engine the pre-migration dump is for: postgres | mysql\nDB_ENGINE=${p.database}`,
+      f,
+    );
+  }
+  return t;
+}
+
+// ── deploy/plesk/server-setup.sh ───────────────────────────────────────────
+
+function renderServerSetup(p: KitParams): string {
+  const f = 'server/server-setup.sh';
+  let t = template(f);
+  t = sub(t, '# TEMPLATE — one-time set-up', '# One-time set-up', f);
+  t = sub(
+    t,
+    /^# ADAPT: APP_NAME, the kit's file names, CHECKOUT_ENV \/ CHECKOUT_UPLOADS, the\n# placeholder env keys, and the database check\. Delete what the stack does not use\.$/m,
+    `# Generated for ${p.app} by plesk-deploy-mcp. Review the database check near the end.`,
+    f,
+  );
+  t = sub(t, /^APP_NAME=myapp +# ADAPT$/m, `APP_NAME=${p.app}`, f);
+  t = sub(
+    t,
+    /^CHECKOUT_ENV=\.env +# ADAPT: .*$/m,
+    `CHECKOUT_ENV=${shQuote(p.checkout_env ?? '.env')}   # the env file, relative to the old checkout`,
+    f,
+  );
+  t = sub(
+    t,
+    /^CHECKOUT_UPLOADS=uploads +# ADAPT: .*$/m,
+    `CHECKOUT_UPLOADS=${shQuote(p.checkout_uploads ?? '')}   # run-time files, relative to the old checkout ("" for none)`,
+    f,
+  );
+  if (p.runtime_env_names.length > 0) {
+    const names = p.runtime_env_names
+      .map((n) => (n === 'NODE_ENV' && p.stack !== 'laravel' && p.stack !== 'static' ? `'NODE_ENV=production'` : `'${n}='`))
+      .join(' ');
+    t = sub(t, /^ {4}# ADAPT: the names from \.env\.example, no values\.\n/m, '    # The names the app reads (from .env.example and the code). No values.\n', f);
+    t = sub(
+      t,
+      /^ {6}'NODE_ENV=production' 'PORT=' 'DB_HOST=127\.0\.0\.1' 'DB_PORT=' 'DB_NAME=' 'DB_USER=' 'DB_PASSWORD=' > "\$ENV_FILE"$/m,
+      `      ${names} > "$ENV_FILE"`,
+      f,
+    );
+  }
+  return t;
+}
+
+// ── deploy/plesk/<app>-db-backup ───────────────────────────────────────────
+
+function renderDbBackup(p: KitParams): string {
+  const f = 'server/db-backup';
+  let t = template(f);
+  t = sub(t, '# TEMPLATE — <app>-db-backup:', `# ${p.app}-db-backup:`, f);
+  t = sub(t, /^DB_ENGINE=\$\{DB_ENGINE:-postgres\}$/m, `DB_ENGINE=\${DB_ENGINE:-${p.database}}`, f);
+  return t;
+}
+
+// ── Process definitions ────────────────────────────────────────────────────
+
+function renderEcosystem(p: KitParams): string {
+  const f = 'process/ecosystem.config.js';
+  const t = template(f);
+  const head = t.slice(0, t.indexOf('module.exports = {'));
+  if (!head) throw new Error(`Template ${f} has changed: no module.exports.`);
+  let h = sub(head, '// TEMPLATE — PM2 processes', '// PM2 processes', f);
+  h = sub(
+    h,
+    /^\/\/ ADAPT: names \(they must match PM2_APPS in deploy\.conf\), folders, scripts,\n\/\/ ports, memory limits\. Keep `instances` at what production runs today unless\n\/\/ the app is known to be safe with more \(sessions, sockets, scheduled jobs\)\.$/m,
+    '// Names must match PM2_APPS in deploy.conf. Keep `instances` at what production\n// runs today unless the app is known to be safe with more (sessions, sockets,\n// scheduled jobs). Ports and secrets come from the env file the release links.',
+    f,
+  );
+  const apps = (p.pm2_apps ?? []).map((a) =>
+    [
+      '    {',
+      `      name: '${a.name}',`,
+      `      cwd: ${a.dir === '.' ? 'CURRENT' : `path.join(CURRENT, '${a.dir}')`},`,
+      `      script: '${a.script}',`,
+      ...(a.args ? [`      args: '${a.args}',`] : []),
+      '      instances: 1,',
+      '      autorestart: true,',
+      "      max_memory_restart: '512M',",
+      '      kill_timeout: 10000, // let in-flight requests and jobs finish',
+      "      env: { NODE_ENV: 'production', RELEASE_VERSION },",
+      '    },',
+    ].join('\n'),
+  );
+  return `${h}module.exports = {\n  apps: [\n${apps.join('\n')}\n  ],\n};\n`;
+}
+
+function renderService(p: KitParams, unit: { name: string; dir: string; script: string }): string {
+  const f = 'process/app.service';
+  let t = template(f);
+  t = sub(t, '# TEMPLATE — /etc/systemd/system/myapp-api.service', `# /etc/systemd/system/${unit.name}.service`, f);
+  t = sub(t, 'SYSTEMD_UNITS="myapp-api")', `SYSTEMD_UNITS="${unit.name}")`, f);
+  t = sub(t, '#   sudo install -m 644 myapp-api.service', `#   sudo install -m 644 ${unit.name}.service`, f);
+  t = sub(t, 'sudo systemctl enable myapp-api', `sudo systemctl enable ${unit.name}`, f);
+  t = sub(
+    t,
+    /^# ADAPT: names, user, paths, the Node binary \(the one the bundle is built for\),\n# the start command, and the port in the env file\.$/m,
+    '# Generated by plesk-deploy-mcp. The Node binary must be the major the bundle is built for.',
+    f,
+  );
+  t = sub(t, /^Description=myapp API$/m, `Description=${p.app} (${unit.name})`, f);
+  t = sub(t, /^User=myapp_sys$/m, p.app_user ? `User=${p.app_user}` : `User=FILL_IN   ${FILL}`, f);
+  t = sub(t, /^Group=psacln$/m, p.app_group ? `Group=${p.app_group}` : `Group=FILL_IN   ${FILL}`, f);
+  t = sub(t, /^WorkingDirectory=.*$/m, `WorkingDirectory=${underCurrent(p.base_dir, unit.dir)}`, f);
+  t = sub(t, /^EnvironmentFile=.*$/m, `EnvironmentFile=${envFile(p)}`, f);
+  t = sub(
+    t,
+    /^ExecStart=.*$/m,
+    p.node_bin_dir ? `ExecStart=${p.node_bin_dir}/node ${unit.script}` : `ExecStart=FILL_IN/node ${unit.script}   ${FILL} (NODE_BIN_DIR)`,
+    f,
+  );
+  t = sub(t, /^# ReadWritePaths=.*$/m, `# ReadWritePaths=${p.base_dir}/shared`, f);
+  t = sub(t, /^SyslogIdentifier=.*$/m, `SyslogIdentifier=${unit.name}`, f);
+  return t;
+}
+
+// ── nginx and the README ───────────────────────────────────────────────────
+
+function renderNginx(p: KitParams): string {
+  if (p.nginx === 'spa') {
+    const spa = 'plesk/nginx-spa-directives.conf';
+    return sub(template(spa), '# TEMPLATE — Plesk', '# Plesk', spa);
+  }
+  const f = 'plesk/nginx-proxy-directives.conf';
+  let t = template(f);
+  t = sub(t, '# TEMPLATE — Plesk:', '# Plesk:', f);
+  t = sub(t, /^# ADAPT: the port\. Keep it closed to the outside in the firewall\.$/m, `# Port ${p.proxy_port}: keep it closed to the outside in the firewall.`, f);
+  t = sub(t, 'proxy_pass http://127.0.0.1:3000;', `proxy_pass http://127.0.0.1:${p.proxy_port};`, f);
+  return t;
+}
+
+function renderReadme(p: KitParams): string {
+  const f = 'docs/DEPLOY-README.md';
+  let t = template(f);
+  t = sub(t, /^<!-- TEMPLATE for deploy\/plesk\/README\.md[\s\S]*?-->\n\n/m, '', f);
+  const reload: Record<ProcessManager, string> = {
+    pm2: 'PM2',
+    systemd: 'the services',
+    'php-fpm': 'PHP-FPM',
+    none: 'nothing (a static site)',
+  };
+  const settingReload: Record<ProcessManager, string> = {
+    pm2: '`pm2 reload all --update-env` (as the app user)',
+    systemd: `\`systemctl restart ${(p.systemd_units ?? []).map((u) => u.name).join(' ') || '<unit>'}\``,
+    'php-fpm': '`php artisan config:cache`',
+    none: 'deploy again (the values are compiled in)',
+  };
+  const replacements: [string, string][] = [
+    ['<PM2 / the services / PHP-FPM>', reload[p.process_manager]],
+    ['<the health URL>', p.health_commit_url ?? p.public_health_url],
+    ['<public health URL>', p.public_health_url],
+    ['<health URL>', p.public_health_url],
+    ['<BASE>', p.base_dir],
+    ['<ENV_FILE>', envFile(p)],
+    ['<BACKUP_DIR>', backupDir(p)],
+    ['<main>', p.branch],
+    [
+      '<`pm2 reload all --update-env` / `systemctl restart …` / `php artisan config:cache`>',
+      settingReload[p.process_manager],
+    ],
+  ];
+  for (const [from, to] of replacements) t = t.split(from).join(to);
+  t = t.split('<app>').join(p.app);
+  if (p.build_time_vars.length) {
+    const rows = p.build_time_vars.map((v) => `   | \`${v}\` | <its public value> |`).join('\n');
+    t = sub(t, '   | `<PUBLIC_API_URL>` | `<https://…>` |', rows, f);
+  } else {
+    t = sub(t, '   | `<PUBLIC_API_URL>` | `<https://…>` |', '   | (none: this build needs no build-time values) | |', f);
+  }
+  return t;
+}
+
+// ── The kit ────────────────────────────────────────────────────────────────
+
+const EXEC = 0o755;
+const FILE = 0o644;
+
+export function renderKit(p: KitParams): RenderedFile[] {
+  const want = new Set(p.parts ?? KIT_PARTS);
+  const files: RenderedFile[] = [];
+  const add = (part: KitPart, path: string, content: string, mode: number, templateFile?: string) => {
+    if (want.has(part)) files.push({ part, path, content, mode, ...(templateFile ? { template: `templates/${templateFile}` } : {}) });
+  };
+  add('workflow', '.github/workflows/deploy-plesk.yml', renderWorkflow(p), FILE, 'github/deploy-plesk.yml');
+  add('build', 'deploy/plesk/build-bundle.sh', renderBuild(p), EXEC, 'build/build-bundle.sh');
+  add('release-manager', `deploy/plesk/${p.app}-deploy`, template('server/app-deploy'), EXEC, 'server/app-deploy');
+  add('deploy-conf', 'deploy/plesk/deploy.conf.example', renderDeployConf(p), FILE, 'server/deploy.conf.example');
+  add('server-setup', 'deploy/plesk/server-setup.sh', renderServerSetup(p), EXEC, 'server/server-setup.sh');
+  if (p.database !== 'none') add('db-backup', `deploy/plesk/${p.app}-db-backup`, renderDbBackup(p), EXEC, 'server/db-backup');
+  if (p.process_manager === 'pm2') {
+    add('process', 'deploy/plesk/ecosystem.config.js', renderEcosystem(p), FILE, 'process/ecosystem.config.js');
+  }
+  if (p.process_manager === 'systemd') {
+    for (const unit of p.systemd_units ?? []) add('process', `deploy/plesk/${unit.name}.service`, renderService(p, unit), FILE, 'process/app.service');
+  }
+  if (p.nginx !== 'none') {
+    add('nginx', 'deploy/plesk/nginx-directives.conf', renderNginx(p), FILE, p.nginx === 'spa' ? 'plesk/nginx-spa-directives.conf' : 'plesk/nginx-proxy-directives.conf');
+  }
+  add('readme', 'deploy/plesk/README.md', renderReadme(p), FILE, 'docs/DEPLOY-README.md');
+  return files;
+}
+
+export interface AdaptPoint {
+  file: string;
+  line: number;
+  text: string;
+}
+
+/** Lines that still need a person: ADAPT notes, FILL IN values and README placeholders. */
+export function adaptPoints(files: RenderedFile[]): AdaptPoint[] {
+  const points: AdaptPoint[] = [];
+  for (const file of files) {
+    file.content.split('\n').forEach((line, i) => {
+      const placeholder = file.path.endsWith('.md') && /<(?!!--)[^<>`\n]{2,}>/.test(line);
+      if (/\bADAPT\b|FILL IN|FILL_IN/.test(line) || placeholder) {
+        points.push({ file: file.path, line: i + 1, text: line.trim().slice(0, 200) });
+      }
+    });
+  }
+  return points;
+}

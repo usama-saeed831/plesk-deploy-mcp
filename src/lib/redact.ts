@@ -25,9 +25,9 @@ const R = (kind: string) => `[REDACTED:${kind}]`;
 const SECRET_NAME =
   /(pass(?:word|wd|phrase)?|pwd|secret|token|api[_.-]?key|apikey|access[_.-]?key|private[_.-]?key|client[_.-]?secret|credential|salt|cookie|signing|dsn|encryption[_.-]?key|(?:^|[_.-])key$|(?:^|[_.-])auth(?:$|[_.-])|database[_.-]?url|redis[_.-]?url|mongo(?:db)?[_.-]?ur[il]|amqp[_.-]?url|^sig$|^signature$)/i;
 
-/** Values that are not secrets themselves: empty, <set>, ${{ secrets.X }}, $VAR, ***, already redacted. */
+/** Values that are not secrets themselves: empty, <set>, shell expansions ($VAR, ${{ secrets.X }}, $(cmd)), ***, already redacted. */
 const PLACEHOLDER =
-  /^(?:|<[^<>]*>|\$\{\{[^}]*\}\}|\$\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\}|\$[A-Za-z_][A-Za-z0-9_]*|\*+|\[REDACTED:[a-z-]+\]|x{3,}|changeme|null|none|true|false)$/i;
+  /^(?:|<[^<>]*>|\$.*|\*+|\[REDACTED:[a-z-]+\]|x{3,}|changeme|null|none|true|false)$/i;
 
 function unquote(value: string): string {
   const v = value.trim();
@@ -126,7 +126,7 @@ const RULES: Rule[] = [
   // name=value inside a line (cron commands, query strings).
   {
     kind: 'assignment',
-    pattern: /(^|[\s?&;,(])([A-Za-z_][A-Za-z0-9_.-]*)=([^\s&;'"]+)/g,
+    pattern: /(^|[\s?&;,('"])([A-Za-z_][A-Za-z0-9_.-]*)=([^\s&;'"]+)/g,
     replace: (m, lead: string, name: string, value: string) =>
       isSecretValue(name, value) ? `${lead}${name}=${R('assignment')}` : m,
   },
