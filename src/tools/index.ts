@@ -3,6 +3,7 @@ import type { Config } from '../config.js';
 import { registerDeployLogs } from './deploy-logs.js';
 import { registerDeployStatus } from './deploy-status.js';
 import { registerGenerateDeployKit } from './generate-deploy-kit.js';
+import { registerGithubDeployRuns } from './github-deploy-runs.js';
 import { registerInspectProject } from './inspect-project.js';
 import { registerRollback } from './rollback.js';
 import { registerServerDiscover } from './server-discover.js';
@@ -21,6 +22,7 @@ export const TOOLS: readonly ToolModule[] = [
   registerDeployStatus,
   registerDeployLogs,
   registerRollback,
+  registerGithubDeployRuns,
 ];
 
 export function registerTools(server: McpServer, config: Config): void {
