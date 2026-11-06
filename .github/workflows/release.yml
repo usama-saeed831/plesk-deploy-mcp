@@ -1,0 +1,110 @@
+# Publishes a release. It runs only on a v*.*.* tag that a maintainer pushes,
+# and it waits for approval in the `release` environment before publishing.
+#
+#   1. every CI check (the same workflow as pushes and pull requests);
+#   2. npm, through trusted publishing (OIDC, no token stored; provenance is
+#      automatic). For the very first version only, an NPM_TOKEN secret may be
+#      set instead: see docs/PUBLISHING.md;
+#   3. the MCP Registry, with mcp-publisher verified by cosign;
+#   4. the .mcpb, attached to a DRAFT GitHub release for the maintainer to publish.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Checks
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    name: Publish to npm and the MCP Registry
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+      id-token: write # npm trusted publishing and mcp-publisher login github-oidc
+    env:
+      MCP_PUBLISHER_VERSION: v1.8.7
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: npm new enough for trusted publishing (11.5.1 or later)
+        run: npm install -g npm@^11.5.1 && npm --version
+      - name: The tag matches every version
+        run: npm run check:metadata
+      - run: npm ci
+      - run: npm run build
+      - name: Publish to npm
+        env:
+          # Empty after the first release: trusted publishing (OIDC) is used.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NODE_AUTH_TOKEN" ]; then
+            npm publish --access public --provenance
+          else
+            npm publish --access public
+          fi
+
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - name: Download and verify mcp-publisher
+        run: |
+          os=linux; arch=amd64
+          archive="mcp-publisher_${os}_${arch}.tar.gz"
+          base="https://github.com/modelcontextprotocol/registry/releases/download/${MCP_PUBLISHER_VERSION}"
+          curl -fsSL -o "$archive" "$base/$archive"
+          curl -fsSL -o "$archive.sigstore.json" "$base/$archive.sigstore.json"
+          cosign verify-blob --bundle "$archive.sigstore.json" \
+            --certificate-identity "https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${MCP_PUBLISHER_VERSION}" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "$archive"
+          tar xzf "$archive" mcp-publisher
+      - name: Publish to the MCP Registry
+        run: |
+          ./mcp-publisher login github-oidc
+          # The registry checks mcpName in the version npm just published; give npm a moment.
+          for attempt in 1 2 3 4 5; do
+            if ./mcp-publisher publish; then exit 0; fi
+            echo "Attempt $attempt failed; retrying in 30s."
+            sleep 30
+          done
+          exit 1
+
+  extension:
+    name: Claude Desktop extension (draft release)
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the draft release
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run build:mcpb
+      - name: Draft a GitHub release with the .mcpb
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 ~ "^## \\[" v "\\]" {on=1; next} on && /^## \[/ {exit} on' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" build/*.mcpb --draft --verify-tag \
+            --title "$GITHUB_REF_NAME" --notes-file notes.md

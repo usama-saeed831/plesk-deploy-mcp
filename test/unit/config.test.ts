@@ -28,3 +28,17 @@ describe('loadConfig', () => {
     expect(Object.keys(c.childEnv)).toEqual(['PATH']);
   });
 });
+
+describe('placeholders a client left unsubstituted', () => {
+  it('are treated as unset, never as a host or a token', () => {
+    const c = loadConfig({
+      PLESK_DEPLOY_SSH_HOSTS: '${user_config.ssh_hosts}',
+      PLESK_DEPLOY_GITHUB_TOKEN: '${user_config.github_token}',
+      PLESK_DEPLOY_SSH_BIN: '',
+    });
+    expect(c.allowedHosts).toEqual([]);
+    expect(c.ignoredHosts).toEqual([]);
+    expect(c.githubToken).toBeUndefined();
+    expect(c.sshBin).toBe('ssh');
+  });
+});

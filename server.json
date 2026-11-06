@@ -1,0 +1,47 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.usama-saeed831/plesk-deploy-mcp",
+  "title": "Plesk Deploy",
+  "description": "Safe, approval-gated Plesk deployments: inspect, generate and validate a kit; status, logs, rollback",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/usama-saeed831/plesk-deploy-mcp",
+  "repository": {
+    "url": "https://github.com/usama-saeed831/plesk-deploy-mcp",
+    "source": "github"
+  },
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/usama-saeed831/plesk-deploy-mcp/main/mcpb/icon.png",
+      "mimeType": "image/png",
+      "sizes": ["512x512"]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "plesk-deploy-mcp",
+      "version": "0.1.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "PLESK_DEPLOY_SSH_HOSTS",
+          "description": "Comma-separated ~/.ssh/config host aliases the SSH tools may reach. Unset: the SSH tools are off.",
+          "isRequired": false,
+          "isSecret": false,
+          "format": "string"
+        },
+        {
+          "name": "PLESK_DEPLOY_GITHUB_TOKEN",
+          "description": "Optional read-only fine-grained token (Actions: read) for github_deploy_runs on private repositories.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}

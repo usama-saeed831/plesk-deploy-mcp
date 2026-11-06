@@ -1,0 +1,105 @@
+{
+  "manifest_version": "0.3",
+  "name": "plesk-deploy-mcp",
+  "display_name": "Plesk Deploy",
+  "version": "0.1.0",
+  "description": "Set up and operate safe, approval-gated deployments to Plesk servers with GitHub Actions and automatic rollback.",
+  "long_description": "Packages the plesk-deploy workflow for any agent. Local tools inspect a project, generate a deploy kit (a GitHub Actions workflow with an approval gate, a release manager that switches releases atomically, migrates safely, health-checks and rolls back by itself, and an idempotent server set-up) as a dry-run diff, and validate it. Optional SSH tools, off until you list your own ~/.ssh/config host aliases, read deploy status and logs and roll back. No tool accepts or returns a secret; deploys always go through GitHub Actions with a person approving. Not affiliated with or endorsed by Plesk or WebPros.",
+  "author": {
+    "name": "Muhammad Usama Saeed",
+    "url": "https://github.com/usama-saeed831"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/usama-saeed831/plesk-deploy-mcp.git"
+  },
+  "homepage": "https://github.com/usama-saeed831/plesk-deploy-mcp",
+  "documentation": "https://github.com/usama-saeed831/plesk-deploy-mcp#readme",
+  "support": "https://github.com/usama-saeed831/plesk-deploy-mcp/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "PLESK_DEPLOY_SSH_HOSTS": "${user_config.ssh_hosts}",
+        "PLESK_DEPLOY_GITHUB_TOKEN": "${user_config.github_token}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "inspect_project",
+      "description": "Read a project and return a Deployment facts table (verified or unknown); env variable names only."
+    },
+    {
+      "name": "server_discovery_commands",
+      "description": "The read-only commands for the user to run on the Plesk server and paste back."
+    },
+    {
+      "name": "generate_deploy_kit",
+      "description": "Render the deploy kit as a dry-run diff; write only when asked, never overwriting unlisted files."
+    },
+    {
+      "name": "validate_deploy_kit",
+      "description": "Check the kit: shell syntax, workflow safety, the release manager's test suite, secrets."
+    },
+    {
+      "name": "server_discover",
+      "description": "Run the fixed read-only discovery commands over your own SSH (opt-in), secrets redacted."
+    },
+    {
+      "name": "deploy_status",
+      "description": "List the releases on the server and which one is live (opt-in SSH)."
+    },
+    {
+      "name": "deploy_logs",
+      "description": "Read the end of the release manager's deploy log (opt-in SSH)."
+    },
+    {
+      "name": "rollback",
+      "description": "Make the previous good release live again; needs an exact confirmation (opt-in SSH)."
+    },
+    {
+      "name": "github_deploy_runs",
+      "description": "Read the status of recent Deploy to Plesk runs from the GitHub API (read-only)."
+    }
+  ],
+  "prompts_generated": true,
+  "keywords": [
+    "plesk",
+    "deployment",
+    "github-actions",
+    "rollback",
+    "pm2",
+    "laravel",
+    "nextjs",
+    "devops"
+  ],
+  "license": "MIT",
+  "privacy_policies": ["https://github.com/usama-saeed831/plesk-deploy-mcp/blob/main/PRIVACY.md"],
+  "compatibility": {
+    "platforms": ["darwin", "win32"],
+    "runtimes": {
+      "node": ">=20.0.0"
+    }
+  },
+  "user_config": {
+    "ssh_hosts": {
+      "type": "string",
+      "title": "Allowed SSH host aliases",
+      "description": "Comma-separated Host aliases from your ~/.ssh/config that the server tools may reach, e.g. myserver. Leave empty to keep the SSH tools off. Your ssh-agent and known_hosts are used; no key or password is ever entered here.",
+      "required": false,
+      "default": ""
+    },
+    "github_token": {
+      "type": "string",
+      "title": "GitHub token (optional, read-only)",
+      "description": "Only for github_deploy_runs on a private repository: a fine-grained token with Actions: read and Metadata: read on that repository.",
+      "sensitive": true,
+      "required": false
+    }
+  }
+}

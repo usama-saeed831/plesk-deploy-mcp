@@ -23,10 +23,21 @@ export interface Config {
   fetch: typeof fetch;
 }
 
+/**
+ * An environment value, or undefined when it is empty or an unsubstituted
+ * placeholder such as ${user_config.github_token} (left by a client when the
+ * user filled in nothing).
+ */
+function setting(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const value = env[name]?.trim();
+  if (!value || /^\$\{[^}]*\}$/.test(value)) return undefined;
+  return value;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   // Commas only: a malformed entry such as "bad alias!" is ignored whole,
   // never split into a different alias that the user didn't mean to allow.
-  const entries = (env.PLESK_DEPLOY_SSH_HOSTS ?? '')
+  const entries = (setting(env, 'PLESK_DEPLOY_SSH_HOSTS') ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
@@ -34,12 +45,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const ignoredHosts = entries.filter((e) => !hostAlias.safeParse(e).success);
 
   const projectDir = env.CLAUDE_PROJECT_DIR;
-  const token = env.PLESK_DEPLOY_GITHUB_TOKEN?.trim();
+  const token = setting(env, 'PLESK_DEPLOY_GITHUB_TOKEN');
 
   return {
     allowedHosts,
     ignoredHosts,
-    sshBin: env.PLESK_DEPLOY_SSH_BIN?.trim() || 'ssh',
+    sshBin: setting(env, 'PLESK_DEPLOY_SSH_BIN') ?? 'ssh',
     childEnv: minimalEnv(env),
     githubToken: token ? token : undefined,
     defaultProjectDir: projectDir && path.isAbsolute(projectDir) ? projectDir : undefined,
