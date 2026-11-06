@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+#
+# A stand-in for ssh in tests. It never connects anywhere. Each call records
+# its arguments (NUL-separated), its stdin and its environment under
+# $FAKE_SSH_STATE/call-<n>/, then:
+#   - with FAKE_SSH_HANDLER: runs that bash script with the remote command
+#     (the last argument) as $1 and the recorded stdin as its stdin;
+#   - otherwise: optionally sleeps (FAKE_SSH_SLEEP), prints FAKE_SSH_STDOUT and
+#     FAKE_SSH_STDERR, and exits with FAKE_SSH_EXIT (default 0).
+set -u
+state=${FAKE_SSH_STATE:?FAKE_SSH_STATE must be set}
+mkdir -p "$state"
+n=$(( $(ls -1 "$state" 2>/dev/null | grep -c '^call-' || true) + 1 ))
+dir="$state/call-$n"
+mkdir -p "$dir"
+printf '%s\0' "$@" > "$dir/argv"
+cat > "$dir/stdin"
+env > "$dir/env"
+remote=${!#}
+
+if [ -n "${FAKE_SSH_HANDLER:-}" ]; then
+  exec bash "$FAKE_SSH_HANDLER" "$remote" < "$dir/stdin"
+fi
+if [ -n "${FAKE_SSH_SLEEP:-}" ]; then
+  # exec, so that killing this process really stops the sleep.
+  if [ -z "${FAKE_SSH_STDOUT:-}" ]; then exec sleep "$FAKE_SSH_SLEEP"; fi
+  sleep "$FAKE_SSH_SLEEP"
+fi
+[ -z "${FAKE_SSH_STDOUT:-}" ] || printf '%s' "$FAKE_SSH_STDOUT"
+[ -z "${FAKE_SSH_STDERR:-}" ] || printf '%s' "$FAKE_SSH_STDERR" >&2
+exit "${FAKE_SSH_EXIT:-0}"
