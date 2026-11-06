@@ -94,12 +94,15 @@ describe.skipIf(process.platform === 'win32')('SSH tools against a fake server',
   });
 
   describe('a server with two releases', () => {
-    const srv = server();
+    // Built in beforeAll, never at collection time: collection also runs on
+    // Windows, where this suite is skipped and there is no bash sandbox.
+    let srv: ReturnType<typeof server>;
     let session: Awaited<ReturnType<typeof connect>>;
     beforeAll(async () => {
+      srv = server();
       session = await connect(srv.config);
     });
-    afterAll(async () => session.close());
+    afterAll(async () => session?.close());
 
     it('deploy_status lists the releases and which is live', async () => {
       const r = await call<{

@@ -1,7 +1,17 @@
 # plesk-deploy-mcp: design for approval
 
-Status: **proposal, not built yet**. The facts it relies on, with
-citations, are in [RESEARCH.md](RESEARCH.md).
+Status: **approved on 6 November 2026 and built (v0.1.0)**. The facts it
+relies on, with citations, are in [RESEARCH.md](RESEARCH.md).
+
+Changes made while building, compared with the design below:
+- TypeScript 7 does the build and typecheck. TypeScript 6.0 stays only as
+  ESLint's parser.
+- Tool annotations: every tool also has an `outputSchema`.
+- `deploy_logs` goes through `--log` only. On an older release manager it
+  explains how to update, rather than falling back to `tail`.
+- The release workflow skips npm when the version is already published, so a
+  hand-published first version or a re-run works.
+- An unsubstituted `${user_config.…}` from a client is treated as unset.
 
 ## 1. Decisions
 
