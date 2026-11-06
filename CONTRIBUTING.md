@@ -24,6 +24,7 @@ npm test
 | `npm run test:integration` | Real sshd in Docker. CI only: it writes `~/.ssh/config` (needs `PLESK_IT_SSHD=1`) |
 | `npm run check:pack` | What `npm pack` would publish |
 | `npm run build:mcpb` | The Claude Desktop extension, in `build/` |
+| `npm run smoke -- /abs/path/to/throwaway-project` | The built server over real stdio: every local tool against a throwaway git project (it writes the kit there) |
 
 If your machine is short on memory, run targeted tests (`npx vitest run
 test/tools/inspect-project.test.ts`) and let CI run the full matrix.

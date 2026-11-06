@@ -32,7 +32,8 @@
     "check:metadata": "node scripts/check-release-metadata.mjs",
     "build:mcpb": "node scripts/build-mcpb.mjs",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "set-version": "node scripts/set-version.mjs"
+    "set-version": "node scripts/set-version.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "keywords": [
     "mcp",
