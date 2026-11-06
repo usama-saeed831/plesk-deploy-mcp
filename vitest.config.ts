@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     include: ['test/**/*.test.ts'],
     exclude: ['test/integration/**', 'node_modules/**'],
+    globalSetup: ['test/setup/build.ts'],
     pool: 'forks',
     // Kept low on purpose: the maintainer's laptop has 8 GB. CI can raise it.
     maxWorkers: process.env.CI ? '50%' : 2,
