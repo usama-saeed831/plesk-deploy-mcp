@@ -24,6 +24,7 @@ The first release.
 - A `--log [N]` command in the release manager, so the deploy account can read
   the root-only deploy log through its single sudo rule.
 - A Claude Desktop extension (`.mcpb`) and an MCP Registry entry.
+- A Claude Code plugin (`plesk-deploy`: the skill plus this server, pinned to the same version), with this repository as its marketplace.
 
 [Unreleased]: https://github.com/usama-saeed831/plesk-deploy-mcp/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/usama-saeed831/plesk-deploy-mcp/releases/tag/v0.1.0

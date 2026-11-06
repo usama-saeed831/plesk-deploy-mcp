@@ -63,6 +63,15 @@ claude mcp add --env PLESK_DEPLOY_SSH_HOSTS=myserver --transport stdio --scope u
 
 Check it with `claude mcp list` (it should say `✔ Connected`), or `/mcp` in a session.
 
+**Or as a plugin.** It brings the server *and* the plesk-deploy skill, which loads by itself when you talk about deploying to Plesk:
+
+```
+/plugin marketplace add usama-saeed831/plesk-deploy-mcp
+/plugin install plesk-deploy@plesk-deploy-mcp
+```
+
+Claude Code then asks for the allowed SSH host aliases (leave it empty to keep the SSH tools off) and an optional read-only GitHub token, which it stores as a secret.
+
 ### Claude Desktop
 
 **As an extension:** download `plesk-deploy-mcp-<version>.mcpb` from the [releases](https://github.com/usama-saeed831/plesk-deploy-mcp/releases), then go to **Settings → Extensions → Advanced settings → Install Extension…** and choose the file. The extension's settings let you enter the allowed SSH host aliases and an optional read-only GitHub token.

@@ -1,0 +1,15 @@
+{
+  "name": "plesk-deploy-mcp",
+  "description": "Safe, approval-gated deployments to Plesk servers: the plesk-deploy workflow and its MCP server.",
+  "owner": {
+    "name": "Muhammad Usama Saeed",
+    "url": "https://github.com/usama-saeed831"
+  },
+  "plugins": [
+    {
+      "name": "plesk-deploy",
+      "source": "./plugins/plesk-deploy",
+      "description": "Set up and run safe deployments to Plesk servers: GitHub Actions builds, a person approves, a release manager switches releases and rolls back by itself."
+    }
+  ]
+}

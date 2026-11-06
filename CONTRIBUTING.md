@@ -24,6 +24,7 @@ npm test
 | `npm run test:integration` | Real sshd in Docker. CI only: it writes `~/.ssh/config` (needs `PLESK_IT_SSHD=1`) |
 | `npm run check:pack` | What `npm pack` would publish |
 | `npm run build:mcpb` | The Claude Desktop extension, in `build/` |
+| `npm run sync:plugin` / `npm run check:plugin` | Copy `kit/` into the Claude Code plugin (`plugins/plesk-deploy/`), or check that it is in step |
 | `npm run smoke -- /abs/path/to/throwaway-project` | The built server over real stdio: every local tool against a throwaway git project (it writes the kit there) |
 
 If your machine is short on memory, run targeted tests (`npx vitest run
@@ -52,6 +53,7 @@ TypeScript: `typecheck` and `build` use TypeScript 7, installed as the
 - **No free-form commands.** Never add a tool that runs a command or a path chosen by the caller. Remote commands come from fixed templates, with validated and quoted values.
 - **No secrets in or out.** No tool parameter may carry a secret, and new output must go through `guarded()`.
 - **Templates** in `kit/templates/` stay as close to the skill as possible. When you change one, update the anchors in `src/kit/render.ts`; the render tests fail on a lost anchor. When you change `kit/templates/server/app-deploy`, run `npm run test:release-manager`, which must end with `0 failed`, and add a scenario for the new behaviour.
+- **The Claude Code plugin** (`plugins/plesk-deploy/`) carries a copy of `kit/`. After changing anything in `kit/`, run `npm run sync:plugin`. CI fails if the copy drifts, and validates the plugin with `claude plugin validate --strict`.
 - **The private reference project** must never be named in this repository. `test/private-names.test.ts` and `npm run check:pack` check for it.
 - **Tests**: a bug fix comes with a test that fails without it. SSH behaviour is tested against `test/fixtures/bin/ssh` and `test/fixtures/server/`, never a real server.
 

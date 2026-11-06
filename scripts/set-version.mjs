@@ -33,4 +33,7 @@ update('server.json', (s) => {
 update('mcpb/manifest.json', (m) => {
   m.version = version;
 });
+execFileSync(process.execPath, [fileURLToPath(new URL('./sync-plugin.mjs', import.meta.url))], {
+  stdio: 'inherit',
+});
 console.error(`Version ${version} set. Next: update CHANGELOG.md, then npm run check:metadata.`);

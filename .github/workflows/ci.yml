@@ -31,8 +31,14 @@ jobs:
       - run: npm run build
       - name: What npm would publish
         run: npm run check:pack
-      - name: package.json, server.json and the .mcpb manifest agree
+      - name: package.json, server.json, the plugin and the .mcpb manifest agree
         run: npm run check:metadata
+      - name: The Claude Code plugin is in step with kit/
+        run: npm run check:plugin
+      - name: Claude Code validates the marketplace and the plugin
+        run: |
+          npx -y @anthropic-ai/claude-code@2.1.318 plugin validate --strict .
+          npx -y @anthropic-ai/claude-code@2.1.318 plugin validate --strict plugins/plesk-deploy
       - name: Build the Claude Desktop extension
         run: npm run build:mcpb
       - uses: actions/upload-artifact@v7

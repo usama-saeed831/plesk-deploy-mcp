@@ -1,0 +1,76 @@
+# /etc/<app>/deploy.conf — settings for the release manager (<app>-deploy) and the
+# one-time set-up (server-setup.sh). Root-owned, mode 644. It holds NO secrets:
+# those stay in the env file(s) it links.
+#
+# TEMPLATE: every value below is an example. Fill each one from what the server
+# shows (references/discovery.md), not from what seems likely. Space-separated
+# lists must not contain spaces inside an item.
+
+# ── Where and who ───────────────────────────────────────────────────────────
+# Where releases live: releases/<id>, current, shared/. For PHP or static sites
+# it must be inside the subscription home (/var/www/vhosts/<domain>/...).
+BASE=/var/www/myapp-app
+
+# The account that runs the app (owns its PM2 processes, or its PHP files), and
+# its group. `pm2 ls` shows processes only to the account that started them:
+# run it as root and as the domain's system user to find out which it is.
+APP_USER=
+APP_GROUP=
+
+# The account GitHub Actions signs in as, and where it uploads bundles.
+DEPLOY_USER=myapp-deploy
+INCOMING=/home/myapp-deploy/incoming
+
+# ── How the app runs ────────────────────────────────────────────────────────
+# pm2 | systemd | php-fpm | none
+PROCESS_MANAGER=pm2
+
+# The folder holding the node (and pm2) the app runs on. Its Node major must match
+# what the bundle is built for (.nvmrc). `pm2 info <name> | grep "node.js version"`.
+NODE_BIN_DIR=/opt/plesk/node/24/bin
+# PM2_BIN=/usr/local/bin/pm2          # only if pm2 is not in NODE_BIN_DIR
+
+# PM2: that account's PM2 home if not ~/.pm2 (for root: /root/.pm2), and each
+# process with its folder under current, so a process started from an old
+# checkout is moved to current once.
+PM2_HOME=
+PM2_ECOSYSTEM=ecosystem.config.js
+PM2_APPS="myapp-api=api myapp-web=web"
+
+# systemd: the units to restart after the switch.
+SYSTEMD_UNITS=
+
+# php-fpm: the domain's FPM service (systemctl list-units 'plesk-php*').
+PHP_FPM_SERVICE=
+
+# ── What a release gets ─────────────────────────────────────────────────────
+# path/in/release=/absolute/target, space-separated. Env files, uploads, storage.
+ENV_FILE=/etc/myapp/app.env
+SHARED_DIR=/var/www/myapp-app/shared
+SHARED_LINKS="api/.env=/etc/myapp/app.env api/uploads=/var/www/myapp-app/shared/uploads"
+
+# Paths that must exist in an unpacked release.
+REQUIRED_FILES="RELEASE.txt ecosystem.config.js api/dist/main.js"
+
+# ── Database ────────────────────────────────────────────────────────────────
+# Run as root before migrating: a dump to undo one deploy. Not the daily backup.
+BACKUP_DIR=/var/backups/myapp
+PRE_MIGRATE_CMD="/usr/local/bin/myapp-db-backup"
+
+# Run as APP_USER inside the new release, before the switch.
+MIGRATE_CMD="cd api && NODE_ENV=production node node_modules/typeorm/cli.js migration:run -d dist/data-source.js"
+
+# Run as APP_USER inside current, after the reload (caches, queue restarts).
+POST_SWITCH_CMD=
+
+# ── Health ──────────────────────────────────────────────────────────────────
+# url or url|text-it-must-contain, space-separated. Prefer the app's own port.
+HEALTH_CHECKS='http://127.0.0.1:3001/health/ready|"status":"ready" http://127.0.0.1:3000/'
+# Its answer must contain the release's commit (proves the new code answers).
+HEALTH_COMMIT_URL=http://127.0.0.1:3001/health/ready
+HEALTH_TIMEOUT_SECONDS=90
+
+# ── Housekeeping ────────────────────────────────────────────────────────────
+KEEP_RELEASES=5
+LOG_FILE=/var/log/myapp-deploy.log
+LOCK_FILE=/var/lock/myapp-deploy.lock
