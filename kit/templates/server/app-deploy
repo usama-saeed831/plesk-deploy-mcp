@@ -5,6 +5,7 @@
 #   sudo <app>-deploy <bundle.tgz>   deploy a bundle from the deploy user's incoming folder
 #   sudo <app>-deploy --rollback     make the previous good release live again
 #   sudo <app>-deploy --status       list the releases, their commits, and which is live
+#   sudo <app>-deploy --log [N]      the last N lines of the deploy log (default 200)
 #
 # Install it as /usr/local/bin/<app>-deploy (the name before "-deploy" is the
 # app's name, and picks /etc/<app>/deploy.conf). The deploy user may run it, and
@@ -80,7 +81,7 @@ log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*"; }
 die() { log "FAILED: $*"; exit 1; }
 trap 'log "Stopped at line $LINENO: $BASH_COMMAND"' ERR
 
-usage() { sed -n '5,7p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '5,8p' "$0" | sed 's/^# \{0,1\}//'; }
 
 require_root() {
   if [ "$REQUIRE_ROOT" = 1 ] && [ "$(id -u)" != 0 ]; then die "Run it with sudo."; fi
@@ -335,8 +336,19 @@ status() {
   [ -n "$live" ] || echo "Nothing is live from $RELEASES yet."
 }
 
+# Read-only: the deploy log is root-only (640), so this goes through the same
+# single sudo rule as everything else. N is a number; the file is LOG_FILE.
+show_log() {
+  local lines=${1:-200}
+  case "$lines" in "" | *[!0-9]*) echo "--log takes a number of lines, for example: $SELF --log 200" >&2; exit 2 ;; esac
+  if [ "$lines" -lt 1 ] || [ "$lines" -gt 5000 ]; then echo "--log takes 1 to 5000 lines." >&2; exit 2; fi
+  if [ ! -r "$LOG_FILE" ]; then echo "No deploy log at $LOG_FILE yet."; return 0; fi
+  tail -n "$lines" -- "$LOG_FILE"
+}
+
 case "${1:-}" in
   --status) status ;;
+  --log) show_log "${2:-200}" ;;
   --rollback) require_root; setup_logging; lock; rollback ;;
   -h | --help | "") usage ;;
   -*) usage; exit 2 ;;

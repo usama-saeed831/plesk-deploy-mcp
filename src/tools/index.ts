@@ -1,7 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { Config } from '../config.js';
+import { registerDeployLogs } from './deploy-logs.js';
+import { registerDeployStatus } from './deploy-status.js';
 import { registerGenerateDeployKit } from './generate-deploy-kit.js';
 import { registerInspectProject } from './inspect-project.js';
+import { registerRollback } from './rollback.js';
+import { registerServerDiscover } from './server-discover.js';
 import { registerServerDiscoveryCommands } from './server-discovery-commands.js';
 import { registerValidateDeployKit } from './validate-deploy-kit.js';
 
@@ -13,6 +17,10 @@ export const TOOLS: readonly ToolModule[] = [
   registerServerDiscoveryCommands,
   registerGenerateDeployKit,
   registerValidateDeployKit,
+  registerServerDiscover,
+  registerDeployStatus,
+  registerDeployLogs,
+  registerRollback,
 ];
 
 export function registerTools(server: McpServer, config: Config): void {

@@ -14,7 +14,7 @@ server: it only unpacks a finished release, migrates, and switches to it.
 | `.github/workflows/deploy-plesk.yml` | Tests (calls `ci.yml`) and builds in parallel, waits for approval, uploads the bundle and runs the release manager |
 | `.github/workflows/ci.yml` | The tests. Also runs on pull requests and other branches; those never deploy |
 | `build-bundle.sh` | Builds the release bundle on the runner |
-| `<app>-deploy` | The release manager on the server: deploy, `--rollback`, `--status` |
+| `<app>-deploy` | The release manager on the server: deploy, `--rollback`, `--status`, `--log` |
 | `<app>-db-backup` | The database dump before each migration |
 | `server-setup.sh` | One-time set-up of the server. Safe to run again |
 | `deploy.conf.example` | The settings, installed as `/etc/<app>/deploy.conf` |
@@ -96,7 +96,7 @@ The app's own secrets stay in `<ENV_FILE>` on the server. They never go into Git
 | Deploy the same bundle again | Re-run failed jobs on the run (the bundle is kept for 7 days) |
 | Roll back | `sudo <app>-deploy --rollback` on the server |
 | See what's live | `sudo <app>-deploy --status` |
-| Read the deploy log | `sudo tail -n 200 /var/log/<app>-deploy.log` |
+| Read the deploy log | `sudo <app>-deploy --log 200` |
 | Read the app's logs | <`sudo -u <user> pm2 logs <name> --lines 100` / `journalctl -u <unit>` / Plesk → Logs> |
 | Change a setting | Edit `<ENV_FILE>`, then <`pm2 reload all --update-env` / `systemctl restart …` / `php artisan config:cache`> |
 

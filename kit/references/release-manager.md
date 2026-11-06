@@ -8,6 +8,7 @@ be tested on a Mac), installed as `/usr/local/bin/<app>-deploy` and configured b
 sudo <app>-deploy <bundle.tgz>   # deploy (GitHub Actions runs this)
 sudo <app>-deploy --rollback     # previous good release
 sudo <app>-deploy --status       # releases, commits, which is live
+sudo <app>-deploy --log 200      # the end of the deploy log (it is root-only)
 ```
 
 ## What a deploy does, and why
@@ -157,5 +158,5 @@ temporary BASE, stand-in `pm2`/`systemctl`/migrate/backup commands and
 `file://` health URLs. It runs the scenarios that matter: first deploy, second
 deploy, failed health with automatic rollback, failed migration with nothing
 switched, a missing required file, a bundle outside `INCOMING`, a Node major
-mismatch, `--rollback`, `--status`, pruning, and the lock. Run it after every
+mismatch, `--rollback`, `--status`, pruning, the lock, and `--log`. Run it after every
 change to the script. It needs only bash, tar and curl.

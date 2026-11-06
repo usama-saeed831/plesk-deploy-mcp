@@ -225,6 +225,19 @@ deploy --rollback; rc=$?
 check "refused clearly" [ "$rc" != 0 ]
 check "says there is nothing to roll back to" out_has "no earlier release"
 
+echo "13. --log reads the end of the deploy log, and nothing else"
+deploy --log 3; rc=$?
+check "log exits 0" [ "$rc" = 0 ]
+check "at most 3 lines" [ "$(grep -c . "$T/last.out")" -le 3 ]
+check "shows the newest entries" out_has "no earlier release"
+deploy --log abc; rc=$?
+check "a non-number is refused" [ "$rc" != 0 ]
+deploy --log 0; rc=$?
+check "zero lines is refused" [ "$rc" != 0 ]
+deploy --log "/etc/passwd"; rc=$?
+check "a path is refused" [ "$rc" != 0 ]
+check "usage lists --log" sh -c "\"$MANAGER\" --help | grep -q -- '--log'"
+
 echo
 echo "$PASS passed, $FAIL failed."
 [ "$FAIL" = 0 ]
