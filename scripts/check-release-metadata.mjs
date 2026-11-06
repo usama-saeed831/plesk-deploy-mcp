@@ -7,6 +7,7 @@ const read = (f) => JSON.parse(readFileSync(new URL(`../${f}`, import.meta.url),
 const pkg = read('package.json');
 const server = read('server.json');
 const manifest = read('mcpb/manifest.json');
+const plugin = read('plugins/plesk-deploy/.claude-plugin/plugin.json');
 const problems = [];
 const expect = (ok, message) => ok || problems.push(message);
 
@@ -28,6 +29,14 @@ expect(
 expect(
   manifest.version === pkg.version,
   `mcpb/manifest.json version (${manifest.version}) must equal package.json (${pkg.version})`,
+);
+expect(
+  plugin.version === pkg.version,
+  `the plugin version (${plugin.version}) must equal package.json (${pkg.version})`,
+);
+expect(
+  JSON.stringify(plugin.mcpServers).includes(`${pkg.name}@${pkg.version}`),
+  `the plugin must pin npx ${pkg.name}@${pkg.version}`,
 );
 expect(manifest.name === pkg.name, `mcpb/manifest.json name must be ${pkg.name}`);
 expect(

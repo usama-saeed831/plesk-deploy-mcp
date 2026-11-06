@@ -1,0 +1,209 @@
+# TEMPLATE — adapt every line marked ADAPT, delete what the project does not use.
+#
+# Deploy to Plesk: every push to the production branch is tested (the existing CI,
+# called as a reusable workflow) and built into one release bundle, in parallel.
+# The deploy waits for approval through the `production` environment, then
+# uploads the bundle and runs the release manager on the server.
+#
+#   - "[skip ci]" in the newest commit message: GitHub runs nothing.
+#   - A push that changes only non-deployed files is tested, not deployed.
+#   - Actions → Deploy to Plesk → Run workflow: deploy another commit/tag/branch
+#     (`ref`), or, in an emergency only, skip the tests (`skip_tests`).
+#
+# Set-up, secrets and rollback: deploy/plesk/README.md.
+
+name: Deploy to Plesk
+
+on:
+  push:
+    branches: [main]                       # ADAPT: the production branch
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Commit, tag or branch to deploy (empty: the newest main)'
+        type: string
+        default: ''
+      skip_tests:
+        description: 'Deploy without running the tests: emergencies only'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  # ADAPT: the existing CI made callable (templates/github/ci-callable.md).
+  # If the project has no CI yet, write ci.yml first; never deploy untested.
+  test:
+    name: Tests
+    if: ${{ !inputs.skip_tests }}
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ inputs.ref }}
+      skip_build: true
+
+  build:
+    name: Release bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      deployable: ${{ steps.changes.outputs.deployable }}
+      bundle: ${{ steps.bundle.outputs.name }}
+      commit: ${{ steps.bundle.outputs.commit }}
+    steps:
+      # ADAPT: one line per build-time setting the bundle needs (repository variables).
+      - name: The build settings are in place
+        run: |
+          missing=""
+          [ -n "${{ vars.PUBLIC_API_URL }}" ] || missing="$missing PUBLIC_API_URL"
+          if [ -n "$missing" ]; then
+            echo "::error::Set the repository variables:$missing (Settings → Secrets and variables → Actions → Variables → Repository variables)."
+            exit 1
+          fi
+
+      # The deploy scripts always come from this run's commit, even when an older
+      # commit is being deployed, so a fix to them applies to every release.
+      - name: Check out the deploy scripts
+        uses: actions/checkout@v4
+        with:
+          path: tooling
+
+      - name: Check out the code to deploy
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          path: app
+          fetch-depth: 0
+
+      - name: Is there anything to deploy?
+        id: changes
+        working-directory: app
+        run: |
+          before='${{ github.event.before }}'
+          if [ '${{ github.event_name }}' != push ] || [ -z "$before" ] \
+            || [ "$before" = 0000000000000000000000000000000000000000 ] \
+            || ! git cat-file -e "$before^{commit}" 2>/dev/null; then
+            echo "deployable=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed=$(git diff --name-only "$before" HEAD)
+          # ADAPT: paths that never affect production.
+          if printf '%s\n' "$changed" | grep -vqE '^(docs/|mobile/)|\.md$'; then
+            echo "deployable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Only files that are not deployed changed: tested, not deployed."
+            echo "deployable=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ADAPT: the runtime the server runs. Node shown; for PHP use
+      # shivammathur/setup-php@v2 with the domain's PHP version (and Node too if
+      # assets are built).
+      - uses: actions/setup-node@v4
+        if: steps.changes.outputs.deployable == 'true'
+        with:
+          node-version-file: tooling/.nvmrc
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Build the bundle
+        id: bundle
+        if: steps.changes.outputs.deployable == 'true'
+        env:
+          PUBLIC_API_URL: ${{ vars.PUBLIC_API_URL }}       # ADAPT
+          RELEASE_REF: ${{ inputs.ref || github.ref_name }}
+        run: bash tooling/deploy/plesk/build-bundle.sh --app-dir app --tooling-dir tooling --out release-bundle
+
+      # Kept for a week, so "Re-run failed jobs" can deploy it again without rebuilding.
+      - uses: actions/upload-artifact@v4
+        if: steps.changes.outputs.deployable == 'true'
+        with:
+          name: release-bundle
+          path: release-bundle/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  deploy:
+    name: Deploy to production
+    needs: [test, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' && (needs.test.result == 'success' || needs.test.result == 'skipped') && needs.build.outputs.deployable == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Required reviewers on this environment approve each deploy, and its
+    # secrets are released only to an approved one.
+    environment:
+      name: production
+      url: https://example.com                # ADAPT
+    # A deploy that has started always finishes; only the newest waiting push follows it.
+    concurrency:
+      group: deploy-plesk-production
+      cancel-in-progress: false
+    env:
+      SSH_HOST: ${{ secrets.PLESK_SSH_HOST }}
+      SSH_USER: ${{ secrets.PLESK_SSH_USER }}
+      SSH_PORT: ${{ secrets.PLESK_SSH_PORT || '22' }}
+      BUNDLE: ${{ needs.build.outputs.bundle }}
+      COMMIT: ${{ needs.build.outputs.commit }}
+      RELEASE_MANAGER: /usr/local/bin/myapp-deploy        # ADAPT
+      PUBLIC_HEALTH_URL: https://api.example.com/health  # ADAPT: answers with the commit (or a version.json)
+      PUBLIC_SITE_URL: https://example.com/              # ADAPT
+    steps:
+      - name: The SSH secrets are in place
+        env:
+          SSH_KEY: ${{ secrets.PLESK_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PLESK_SSH_KNOWN_HOSTS }}
+        run: |
+          missing=""
+          [ -n "$SSH_HOST" ] || missing="$missing PLESK_SSH_HOST"
+          [ -n "$SSH_USER" ] || missing="$missing PLESK_SSH_USER"
+          [ -n "$SSH_KEY" ] || missing="$missing PLESK_SSH_KEY"
+          [ -n "$SSH_KNOWN_HOSTS" ] || missing="$missing PLESK_SSH_KNOWN_HOSTS"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing secrets in the production environment:$missing. See deploy/plesk/README.md."
+            exit 1
+          fi
+          case "$SSH_KEY" in
+            *"PRIVATE KEY"*) ;;
+            *) echo "::error::PLESK_SSH_KEY is not a private key: paste the whole private key file, including its BEGIN and END lines."; exit 1 ;;
+          esac
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundle
+          path: release-bundle
+
+      - name: Prepare SSH
+        env:
+          SSH_KEY: ${{ secrets.PLESK_SSH_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.PLESK_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Upload the bundle
+        run: |
+          scp -P "$SSH_PORT" -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "release-bundle/$BUNDLE" "$SSH_USER@$SSH_HOST:incoming/"
+
+      - name: Deploy on the server
+        run: |
+          ssh -p "$SSH_PORT" -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$SSH_USER@$SSH_HOST" "sudo $RELEASE_MANAGER ~/incoming/$BUNDLE"
+
+      # From outside, through Plesk's proxy and TLS: the site answers and reports this commit.
+      - name: Live, from outside
+        run: |
+          body=$(curl -fsS --max-time 15 "$PUBLIC_HEALTH_URL")
+          echo "$body"
+          printf '%s' "$body" | grep -qF "$COMMIT" || {
+            echo "::error::$PUBLIC_HEALTH_URL answers, but does not report $COMMIT."
+            exit 1
+          }
+          curl -fsS -o /dev/null --max-time 15 "$PUBLIC_SITE_URL"
+
+      - name: Remove the key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

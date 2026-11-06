@@ -155,7 +155,7 @@ January 2027. Path A must happen before then; after that, use path B or
 ## 7. Every later release
 
 ```bash
-npm run set-version 0.1.1
+npm run set-version 0.1.1      # also updates the Claude Code plugin and its npx pin
 # edit CHANGELOG.md
 npm run check:metadata
 git commit -am "Release 0.1.1" && git push
@@ -183,14 +183,25 @@ release.
   desktop-extension submission form. If you want the `.mcpb` itself listed,
   ask `directory@anthropic.com` before relying on that form.
 
-The plugin is a follow-up to v0.1.0, because it must pin an exact npm version:
-`npx -y plesk-deploy-mcp@0.1.0`. When you're ready:
+**The plugin already exists.** It is `plugins/plesk-deploy/` in this
+repository, and the repository is its own Claude Code marketplace
+(`.claude-plugin/marketplace.json`). The plugin contains:
+- the skill (a copy of `kit/`, kept in step by `npm run sync:plugin`);
+- the MCP server, as `npx -y plesk-deploy-mcp@<version>` pinned to the
+  package version;
+- two `userConfig` options, with the GitHub token marked `sensitive`.
 
-1. Build a plugin, in this repository or a public one of its own, containing:
-   - the skill under `skills/plesk-deploy/`;
-   - the MCP server declared with `command` and `args` (not as a `.mcpb`),
-     with `npx` pinned to the exact version;
-   - the GitHub token as a `userConfig` option with `sensitive: true`.
+CI validates it with `claude plugin validate --strict`.
+
+**It only works once that exact version is on npm.** Until then, installing
+it gives you the skill, but its MCP server can't start. So:
+
+1. **After 0.1.0 is on npm**, install it from your own marketplace and try it:
+
+   ```
+   /plugin marketplace add usama-saeed831/plesk-deploy-mcp
+   /plugin install plesk-deploy@plesk-deploy-mcp
+   ```
 2. Go through the pre-submission checklist (`plugins/pre-submission-checklist.md`) and the directory policy:
 
    | Requirement | Status |
@@ -213,5 +224,5 @@ The plugin is a follow-up to v0.1.0, because it must pin an exact npm version:
    2. "Inspect this project and show me its deployment facts."
    3. "What's live on `myserver` for app `acme`, and what does the deploy log say?"
    4. "Has my last Deploy to Plesk run in `me/acme` finished, or is it waiting for approval?"
-3. Submit at https://claude.ai/directory/manage → **Submit new** → **Plugin bundle**. This needs a Pro, Max, Ultra, Team or Enterprise plan, and the repository must be public.
+3. Submit at https://claude.ai/directory/manage → **Submit new** → **Plugin bundle**, pointing it at this public repository. The plugin is in `plugins/plesk-deploy/`, listed by `.claude-plugin/marketplace.json`. **Unclear:** the docs don't say whether the portal takes a marketplace repository or a repository whose root is the plugin. If it asks for the latter, the plugin folder can be published as a repository of its own. Submitting needs a Pro, Max, Ultra, Team or Enterprise plan.
 4. After it's listed, tell Anthropic about material changes (policy 3H). Later versions may publish automatically, depending on the listing's settings.

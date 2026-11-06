@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+#
+# TEMPLATE — <app>-db-backup: a database dump before each migration, run by the
+# release manager as PRE_MIGRATE_CMD (as root, RELEASE_ID set). Not the daily
+# backup: that one is encrypted, off-server and restore-tested.
+#
+# Reads the login from the app's env file without printing it, and passes the
+# password through the environment (PGPASSWORD / MYSQL_PWD), never the command line.
+#
+#   DB_ENGINE    postgres | mysql                      (default: postgres)
+#   DB_ENV_FILE  the app's env file                    (default: ENV_FILE from deploy.conf)
+#   BACKUP_DIR   where dumps go, root-only             (default: from deploy.conf)
+#   KEEP_DUMPS   how many to keep                      (default: 5)
+#
+# Understands DB_HOST/DB_PORT/DB_NAME|DB_DATABASE/DB_USER|DB_USERNAME/DB_PASSWORD,
+# and, for PostgreSQL, DATABASE_URL. ADAPT if the app names them differently.
+
+set -Eeuo pipefail
+
+SELF=$(basename "$0")
+APP_NAME=${APP_DEPLOY_NAME:-${SELF%-db-backup}}
+CONF=${APP_DEPLOY_CONF:-/etc/$APP_NAME/deploy.conf}
+# shellcheck disable=SC1090
+[ -r "$CONF" ] && . "$CONF"
+
+DB_ENGINE=${DB_ENGINE:-postgres}
+DB_ENV_FILE=${DB_ENV_FILE:-${ENV_FILE:-}}
+: "${DB_ENV_FILE:?Set DB_ENV_FILE or ENV_FILE}"
+: "${BACKUP_DIR:?Set BACKUP_DIR}"
+KEEP_DUMPS=${KEEP_DUMPS:-5}
+ID=${RELEASE_ID:-$(date -u +%Y%m%d-%H%M%S)}
+
+value() {
+  local key
+  for key in "$@"; do
+    awk -v key="$key" 'index($0, key "=") == 1 {
+      v = substr($0, length(key) + 2)
+      if (v ~ /^".*"$/ || v ~ /^\047.*\047$/) v = substr(v, 2, length(v) - 2)
+      print v; found = 1; exit
+    } END { exit found ? 0 : 1 }' "$DB_ENV_FILE" && return 0
+  done
+  return 0
+}
+
+install -d -m 700 "$BACKUP_DIR"
+umask 077
+OUT="$BACKUP_DIR/pre-$ID.dump"
+
+case "$DB_ENGINE" in
+  postgres)
+    command -v pg_dump >/dev/null || { echo "pg_dump is not installed." >&2; exit 1; }
+    url=$(value DATABASE_URL)
+    if [ -n "$url" ]; then
+      pg_dump -Fc --no-owner -f "$OUT" "$url"
+    else
+      PGPASSWORD=$(value DB_PASSWORD) pg_dump -Fc --no-owner \
+        -h "$(value DB_HOST | grep . || echo 127.0.0.1)" -p "$(value DB_PORT | grep . || echo 5432)" \
+        -U "$(value DB_USER DB_USERNAME)" -f "$OUT" "$(value DB_NAME DB_DATABASE)"
+    fi
+    ;;
+  mysql)
+    command -v mysqldump >/dev/null || { echo "mysqldump is not installed." >&2; exit 1; }
+    MYSQL_PWD=$(value DB_PASSWORD) mysqldump --single-transaction --routines --triggers --no-tablespaces \
+      -h "$(value DB_HOST | grep . || echo 127.0.0.1)" -P "$(value DB_PORT | grep . || echo 3306)" \
+      -u "$(value DB_USER DB_USERNAME)" "$(value DB_NAME DB_DATABASE)" > "$OUT"
+    ;;
+  *) echo "Unknown DB_ENGINE: $DB_ENGINE" >&2; exit 2 ;;
+esac
+
+[ -s "$OUT" ] || { echo "The dump is empty: $OUT" >&2; rm -f "$OUT"; exit 1; }
+echo "Dump: $OUT ($(du -h "$OUT" | cut -f1))"
+
+# The newest KEEP_DUMPS are kept.
+{ ls -1t "$BACKUP_DIR"/pre-*.dump 2>/dev/null || true; } | tail -n +"$((KEEP_DUMPS + 1))" | while read -r old; do
+  rm -f "$old"
+done
+exit 0

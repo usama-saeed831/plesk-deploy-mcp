@@ -1,0 +1,39 @@
+{
+  "name": "plesk-deploy",
+  "displayName": "Plesk Deploy",
+  "version": "0.1.0",
+  "description": "Set up and run safe, approval-gated deployments to Plesk servers: the plesk-deploy workflow as a skill, plus the plesk-deploy-mcp server that inspects the project, generates and validates the deploy kit, and (opt-in) reads status and logs and rolls back over your own SSH.",
+  "author": {
+    "name": "Muhammad Usama Saeed",
+    "url": "https://github.com/usama-saeed831"
+  },
+  "homepage": "https://github.com/usama-saeed831/plesk-deploy-mcp",
+  "repository": "https://github.com/usama-saeed831/plesk-deploy-mcp",
+  "license": "MIT",
+  "keywords": ["plesk", "deployment", "github-actions", "rollback", "pm2", "laravel", "nextjs"],
+  "mcpServers": {
+    "plesk-deploy": {
+      "command": "npx",
+      "args": ["-y", "plesk-deploy-mcp@0.1.0"],
+      "env": {
+        "PLESK_DEPLOY_SSH_HOSTS": "${user_config.ssh_hosts}",
+        "PLESK_DEPLOY_GITHUB_TOKEN": "${user_config.github_token}"
+      }
+    }
+  },
+  "userConfig": {
+    "ssh_hosts": {
+      "type": "string",
+      "title": "Allowed SSH host aliases",
+      "description": "Comma-separated Host aliases from your ~/.ssh/config that the server tools may reach, for example myserver. Leave empty to keep the SSH tools off. Your own ssh-agent and known_hosts are used; never enter a key or password here.",
+      "default": ""
+    },
+    "github_token": {
+      "type": "string",
+      "title": "GitHub token (optional, read-only)",
+      "description": "Only for reading Deploy to Plesk runs of a private repository: a fine-grained token with Actions: read and Metadata: read on that repository. Leave empty for public repositories.",
+      "sensitive": true,
+      "default": ""
+    }
+  }
+}

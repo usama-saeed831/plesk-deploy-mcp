@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+#
+# app-deploy — a release manager for one application on a Plesk (or any Linux) server.
+#
+#   sudo <app>-deploy <bundle.tgz>   deploy a bundle from the deploy user's incoming folder
+#   sudo <app>-deploy --rollback     make the previous good release live again
+#   sudo <app>-deploy --status       list the releases, their commits, and which is live
+#   sudo <app>-deploy --log [N]      the last N lines of the deploy log (default 200)
+#
+# Install it as /usr/local/bin/<app>-deploy (the name before "-deploy" is the
+# app's name, and picks /etc/<app>/deploy.conf). The deploy user may run it, and
+# nothing else, through sudo. See deploy.conf.example for every setting.
+#
+# A deploy:
+#   1. takes only a .tgz from the deploy user's incoming folder;
+#   2. unpacks it into $BASE/releases/<YYYYmmdd-HHMMSS> and checks REQUIRED_FILES,
+#      and, if RELEASE.txt names one, that this server runs the same Node major;
+#   3. links SHARED_LINKS into it (.env files, uploads, storage);
+#   4. runs PRE_MIGRATE_CMD (a backup), then MIGRATE_CMD, as the app user;
+#   5. switches $BASE/current to it in one step, reloads the processes, and
+#      checks HEALTH_CHECKS — including, when asked, that the app reports the commit;
+#   6. if they fail, switches back to the release that was live and marks this
+#      one <id>-failed. Up to and including the migrations, a failure touches
+#      nothing live.
+#
+# A rollback switches code only. Migrations are not undone, which is why they
+# must be additive and backward compatible.
+#
+# Everything that needs root or a real server can be overridden, so the script
+# can be tried in a temporary folder (templates' scripts/test-release-manager.sh):
+#   APP_DEPLOY_CONF, APP_DEPLOY_REQUIRE_ROOT=0, APP_DEPLOY_RUN_AS_APP=0,
+#   APP_DEPLOY_SYSTEMCTL, APP_DEPLOY_PM2, APP_DEPLOY_NODE
+#
+# Portable to bash 3.2 (macOS) so it can be tested on a laptop.
+
+set -Eeuo pipefail
+
+SELF=$(basename "$0")
+APP_NAME=${APP_DEPLOY_NAME:-${SELF%-deploy}}
+CONF=${APP_DEPLOY_CONF:-/etc/$APP_NAME/deploy.conf}
+if [ ! -r "$CONF" ]; then
+  echo "No settings at $CONF. Run server-setup.sh first." >&2
+  exit 2
+fi
+# shellcheck disable=SC1090
+. "$CONF"
+
+: "${BASE:?BASE is not set in $CONF}"
+: "${APP_USER:?APP_USER is not set in $CONF}"
+: "${INCOMING:?INCOMING is not set in $CONF}"
+APP_GROUP=${APP_GROUP:-$APP_USER}
+PROCESS_MANAGER=${PROCESS_MANAGER:-none}       # pm2 | systemd | php-fpm | none
+SHARED_LINKS=${SHARED_LINKS:-}                  # "path/in/release=/absolute/target ..."
+REQUIRED_FILES=${REQUIRED_FILES:-RELEASE.txt}   # paths inside a release, space-separated
+PRE_MIGRATE_CMD=${PRE_MIGRATE_CMD:-}            # run as root, before migrating (a backup)
+MIGRATE_CMD=${MIGRATE_CMD:-}                    # run as the app user, in the new release
+POST_SWITCH_CMD=${POST_SWITCH_CMD:-}            # run as the app user, in current, after the switch (caches)
+HEALTH_CHECKS=${HEALTH_CHECKS:-}                # "url|text it must contain ..." ; text may be empty
+HEALTH_COMMIT_URL=${HEALTH_COMMIT_URL:-}        # a URL whose answer must contain the release's commit
+HEALTH_TIMEOUT_SECONDS=${HEALTH_TIMEOUT_SECONDS:-90}
+NODE_BIN_DIR=${NODE_BIN_DIR:-}
+PM2_HOME=${PM2_HOME:-}
+PM2_ECOSYSTEM=${PM2_ECOSYSTEM:-ecosystem.config.js}   # inside a release; copied to $BASE
+PM2_APPS=${PM2_APPS:-}                          # "name=path/under/current ..." for the first switch
+SYSTEMD_UNITS=${SYSTEMD_UNITS:-}
+PHP_FPM_SERVICE=${PHP_FPM_SERVICE:-}
+KEEP_RELEASES=${KEEP_RELEASES:-5}
+LOG_FILE=${LOG_FILE:-/var/log/$APP_NAME-deploy.log}
+LOCK_FILE=${LOCK_FILE:-/var/lock/$APP_NAME-deploy.lock}
+
+REQUIRE_ROOT=${APP_DEPLOY_REQUIRE_ROOT:-1}
+RUN_AS_APP=${APP_DEPLOY_RUN_AS_APP:-1}
+SYSTEMCTL=${APP_DEPLOY_SYSTEMCTL:-systemctl}
+PM2=${APP_DEPLOY_PM2:-${PM2_BIN:-${NODE_BIN_DIR:+$NODE_BIN_DIR/}pm2}}
+NODE=${APP_DEPLOY_NODE:-${NODE_BIN_DIR:+$NODE_BIN_DIR/}node}
+
+RELEASES="$BASE/releases"
+CURRENT="$BASE/current"
+
+log() { printf '[%s] %s\n' "$(date -u +%FT%TZ)" "$*"; }
+die() { log "FAILED: $*"; exit 1; }
+trap 'log "Stopped at line $LINENO: $BASH_COMMAND"' ERR
+
+usage() { sed -n '5,8p' "$0" | sed 's/^# \{0,1\}//'; }
+
+require_root() {
+  if [ "$REQUIRE_ROOT" = 1 ] && [ "$(id -u)" != 0 ]; then die "Run it with sudo."; fi
+}
+
+setup_logging() {
+  mkdir -p "$(dirname "$LOG_FILE")"
+  touch "$LOG_FILE"
+  exec > >(tee -a "$LOG_FILE") 2>&1
+}
+
+lock() {
+  if command -v flock >/dev/null 2>&1; then
+    exec 9>"$LOCK_FILE"
+    flock -n 9 || die "Another deploy is running. Wait for it (tail -f $LOG_FILE), then try again."
+  else
+    mkdir "$LOCK_FILE.d" 2>/dev/null \
+      || die "Another deploy is running, or one stopped without cleaning up. If none is running: rmdir $LOCK_FILE.d"
+    trap 'rmdir "$LOCK_FILE.d" 2>/dev/null || true' EXIT
+  fi
+}
+
+# A command as the app user, with the runtime it uses on PATH.
+as_app() {
+  local path="${NODE_BIN_DIR:+$NODE_BIN_DIR:}/usr/local/bin:/usr/bin:/bin"
+  if [ "$RUN_AS_APP" = 1 ] && [ "$APP_USER" != "$(id -un)" ]; then
+    sudo -u "$APP_USER" -H env "PATH=$path" ${PM2_HOME:+"PM2_HOME=$PM2_HOME"} "$@"
+  else
+    env "PATH=${NODE_BIN_DIR:+$NODE_BIN_DIR:}$PATH" ${PM2_HOME:+"PM2_HOME=$PM2_HOME"} "$@"
+  fi
+}
+
+release_ids() { ls -1 "$RELEASES" 2>/dev/null | grep -E '^[0-9]{8}-[0-9]{6}$' | sort || true; }
+live_id() { if [ -L "$CURRENT" ]; then basename "$(readlink "$CURRENT")"; fi; }
+release_value() { awk -F= -v k="$2" '$1 == k { print substr($0, length(k) + 2); exit }' "$RELEASES/$1/RELEASE.txt" 2>/dev/null || true; }
+
+switch_to() {
+  ln -sfn "$RELEASES/$1" "$BASE/current.next"
+  if mv --version >/dev/null 2>&1; then
+    mv -Tf "$BASE/current.next" "$CURRENT"   # GNU: atomic
+  else
+    rm -f "$CURRENT"; mv "$BASE/current.next" "$CURRENT"   # BSD (a laptop, when testing)
+  fi
+}
+
+# ── Processes ───────────────────────────────────────────────────────────────
+
+pm2_cwd() {
+  as_app "$PM2" jlist 2>/dev/null | "$NODE" -e '
+    let s = "";
+    process.stdin.on("data", (d) => { s += d; }).on("end", () => {
+      try {
+        const app = JSON.parse(s).find((p) => p.name === process.argv[1]);
+        process.stdout.write(app && app.pm2_env ? String(app.pm2_env.pm_cwd || "") : "");
+      } catch { /* PM2 printed a warning first */ }
+    });' "$1" || true
+}
+
+reload_processes() {
+  case "$PROCESS_MANAGER" in
+    pm2)
+      cp "$CURRENT/$PM2_ECOSYSTEM" "$BASE/ecosystem.config.js"
+      chmod 644 "$BASE/ecosystem.config.js"
+      # A process started from elsewhere (a git checkout) keeps that folder
+      # through a reload, so it is started afresh once, from `current`.
+      local entry name expected cwd
+      for entry in $PM2_APPS; do
+        name=${entry%%=*}; expected="$CURRENT/${entry#*=}"
+        cwd=$(pm2_cwd "$name")
+        if [ -n "$cwd" ] && [ "$cwd" != "$expected" ]; then
+          log "$name runs from $cwd; starting it afresh from $expected"
+          as_app "$PM2" delete "$name" >/dev/null || return 1
+        fi
+      done
+      as_app "$PM2" startOrReload "$BASE/ecosystem.config.js" --update-env || return 1
+      as_app "$PM2" save >/dev/null || return 1
+      ;;
+    systemd)
+      [ -n "$SYSTEMD_UNITS" ] || { log "PROCESS_MANAGER=systemd but SYSTEMD_UNITS is empty."; return 1; }
+      # shellcheck disable=SC2086
+      $SYSTEMCTL restart $SYSTEMD_UNITS || return 1
+      ;;
+    php-fpm)
+      # So OPcache stops serving the previous release's files.
+      [ -z "$PHP_FPM_SERVICE" ] || $SYSTEMCTL reload "$PHP_FPM_SERVICE" || return 1
+      ;;
+    none) ;;
+    *) log "Unknown PROCESS_MANAGER: $PROCESS_MANAGER"; return 1 ;;
+  esac
+  if [ -n "$POST_SWITCH_CMD" ]; then
+    (cd "$CURRENT" && as_app sh -c "$POST_SWITCH_CMD") || return 1
+  fi
+  return 0
+}
+
+# ── Checks ──────────────────────────────────────────────────────────────────
+
+healthy() {
+  local commit=$1 deadline entry url want body ok
+  deadline=$(( $(date +%s) + HEALTH_TIMEOUT_SECONDS ))
+  while :; do
+    ok=1
+    for entry in $HEALTH_CHECKS; do
+      url=${entry%%|*}; want=""
+      [ "$entry" != "$url" ] && want=${entry#*|}
+      body=$(curl -fsS --max-time 5 "$url" 2>/dev/null) || { ok=0; continue; }
+      if [ -n "$want" ] && ! printf '%s' "$body" | grep -qF -- "$want"; then ok=0; fi
+    done
+    if [ -n "$HEALTH_COMMIT_URL" ] && [ -n "$commit" ]; then
+      body=$(curl -fsS --max-time 5 "$HEALTH_COMMIT_URL" 2>/dev/null || true)
+      printf '%s' "$body" | grep -qF -- "$commit" || ok=0
+    fi
+    [ "$ok" = 1 ] && return 0
+    if [ "$(date +%s)" -ge "$deadline" ]; then
+      log "Not healthy after ${HEALTH_TIMEOUT_SECONDS}s. Checks: ${HEALTH_CHECKS:-none}${HEALTH_COMMIT_URL:+; commit at $HEALTH_COMMIT_URL}"
+      return 1
+    fi
+    sleep 3
+  done
+}
+
+check_release() {
+  local dir="$RELEASES/$1" missing=0 file want have
+  for file in $REQUIRED_FILES; do
+    if [ ! -e "$dir/$file" ]; then log "Missing from the release: $file"; missing=1; fi
+  done
+  [ "$missing" = 0 ] || return 1
+  want=$(release_value "$1" node_major)
+  if [ -n "$want" ] && [ -n "$NODE" ]; then
+    have=$("$NODE" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo none)
+    if [ "$want" != "$have" ]; then
+      log "The bundle was built with Node $want; this server runs Node $have ($NODE). Native modules are compiled for one."
+      return 1
+    fi
+  fi
+  return 0
+}
+
+link_shared() {
+  local dir="$RELEASES/$1" entry rel target
+  for entry in $SHARED_LINKS; do
+    rel=${entry%%=*}; target=${entry#*=}
+    case "$rel" in
+      "" | /* | *..* | "$entry") log "SHARED_LINKS entry '$entry' must be path/in/release=/absolute/target."; return 1 ;;
+    esac
+    case "$target" in /*) ;; *) log "SHARED_LINKS target '$target' must be an absolute path."; return 1 ;; esac
+    [ -e "$target" ] || { log "Shared target missing: $target (for $rel). Create it, or run server-setup.sh."; return 1; }
+    mkdir -p "$(dirname "$dir/$rel")"
+    rm -rf "${dir:?}/$rel"
+    ln -sfn "$target" "$dir/$rel"
+  done
+  return 0
+}
+
+abandon() {
+  local id=$1; shift
+  mv "$RELEASES/$id" "$RELEASES/$id-failed" 2>/dev/null || true
+  die "$* The live release was not touched."
+}
+
+prune() {
+  local live count old
+  live=$(live_id)
+  count=$(release_ids | grep -c . || true)
+  release_ids | awk -v n=$((count - KEEP_RELEASES)) 'NR <= n' | while read -r old; do
+    if [ -n "$old" ] && [ "$old" != "$live" ]; then rm -rf "${RELEASES:?}/$old"; log "Removed old release $old"; fi
+  done
+  { ls -1 "$RELEASES" 2>/dev/null | grep -E '^[0-9]{8}-[0-9]{6}-failed$' || true; } | sort -r | tail -n +4 | while read -r old; do
+    rm -rf "${RELEASES:?}/$old"
+  done
+  return 0
+}
+
+# ── Commands ────────────────────────────────────────────────────────────────
+
+deploy() {
+  local arg=$1 dir bundle id previous commit
+  case "$arg" in */*) ;; *) arg="$INCOMING/$arg" ;; esac
+  dir=$(cd "$(dirname "$arg")" 2>/dev/null && pwd -P) || die "There is no folder $(dirname "$arg")."
+  bundle="$dir/$(basename "$arg")"
+  [ "$dir" = "$(cd "$INCOMING" 2>/dev/null && pwd -P)" ] || die "Bundles are only taken from $INCOMING, not $dir."
+  case "$bundle" in *.tgz) ;; *) die "$bundle is not a .tgz bundle." ;; esac
+  if [ ! -f "$bundle" ] || [ -L "$bundle" ]; then die "There is no bundle at $bundle."; fi
+
+  mkdir -p "$RELEASES"
+  id=$(date -u +%Y%m%d-%H%M%S)
+  while [ -e "$RELEASES/$id" ] || [ -e "$RELEASES/$id-failed" ]; do sleep 1; id=$(date -u +%Y%m%d-%H%M%S); done
+  previous=$(live_id)
+  log "Deploying $(basename "$bundle") as release $id. Live now: ${previous:-nothing}."
+
+  mkdir "$RELEASES/$id"
+  tar -xzf "$bundle" -C "$RELEASES/$id" --strip-components=1 || abandon "$id" "The bundle could not be unpacked."
+  check_release "$id" || abandon "$id" "The release is not complete."
+  commit=$(release_value "$id" commit)
+  log "Commit ${commit:-unknown}"
+  link_shared "$id" || abandon "$id" "A shared file or folder is missing."
+  if [ "$(id -u)" = 0 ]; then chown -R "$APP_USER:$APP_GROUP" "$RELEASES/$id"; fi
+
+  if [ -n "$PRE_MIGRATE_CMD" ]; then
+    log "Before migrating: $PRE_MIGRATE_CMD"
+    (cd "$RELEASES/$id" && RELEASE_ID=$id sh -c "$PRE_MIGRATE_CMD") || abandon "$id" "The pre-migration step (backup) failed. Nothing was migrated."
+  fi
+  if [ -n "$MIGRATE_CMD" ]; then
+    log "Migrating"
+    (cd "$RELEASES/$id" && as_app sh -c "$MIGRATE_CMD") \
+      || abandon "$id" "The migrations failed. Any that ran must leave the live code working: migrations only add."
+  fi
+
+  switch_to "$id"
+  log "Reloading ($PROCESS_MANAGER)"
+  if reload_processes && healthy "$commit"; then
+    rm -f "$bundle"
+    prune
+    log "Release $id (${commit:-unknown}) is live."
+    return 0
+  fi
+
+  if [ -z "$previous" ] || [ ! -d "$RELEASES/$previous" ]; then
+    die "Release $id is not healthy, and there is no earlier release to go back to, so it stays live. Read the app's logs."
+  fi
+  log "Release $id is not healthy. Going back to $previous."
+  switch_to "$previous"
+  if reload_processes && healthy "$(release_value "$previous" commit)"; then
+    log "Back on $previous, which is healthy."
+  else
+    log "WARNING: $previous is not answering its health checks either. Read the app's logs now."
+  fi
+  mv "$RELEASES/$id" "$RELEASES/$id-failed"
+  die "Release $id (${commit:-unknown}) failed its health checks and is not live."
+}
+
+rollback() {
+  local live target
+  live=$(live_id)
+  target=$(release_ids | awk -v live="$live" 'live == "" || $0 < live' | tail -n 1)
+  [ -n "$target" ] || die "There is no earlier release to roll back to. See: $SELF --status"
+  log "Rolling back from ${live:-nothing} to $target ($(release_value "$target" commit)). Migrations are not undone."
+  switch_to "$target"
+  reload_processes || die "The processes did not reload."
+  healthy "$(release_value "$target" commit)" || die "Rolled back to $target, but it is not answering its health checks."
+  log "Rolled back: $target is live."
+}
+
+status() {
+  local live id marker
+  live=$(live_id)
+  echo "Releases in $RELEASES, newest first (* is live):"
+  { ls -1 "$RELEASES" 2>/dev/null | grep -E '^[0-9]{8}-[0-9]{6}(-failed)?$' || true; } | sort -r | while read -r id; do
+    marker="  "; [ "$id" = "$live" ] && marker="* "
+    printf '%s%-22s %s\n' "$marker" "$id" "$(release_value "$id" commit)"
+  done
+  [ -n "$live" ] || echo "Nothing is live from $RELEASES yet."
+}
+
+# Read-only: the deploy log is root-only (640), so this goes through the same
+# single sudo rule as everything else. N is a number; the file is LOG_FILE.
+show_log() {
+  local lines=${1:-200}
+  case "$lines" in "" | *[!0-9]*) echo "--log takes a number of lines, for example: $SELF --log 200" >&2; exit 2 ;; esac
+  if [ "$lines" -lt 1 ] || [ "$lines" -gt 5000 ]; then echo "--log takes 1 to 5000 lines." >&2; exit 2; fi
+  if [ ! -r "$LOG_FILE" ]; then echo "No deploy log at $LOG_FILE yet."; return 0; fi
+  tail -n "$lines" -- "$LOG_FILE"
+}
+
+case "${1:-}" in
+  --status) status ;;
+  --log) show_log "${2:-200}" ;;
+  --rollback) require_root; setup_logging; lock; rollback ;;
+  -h | --help | "") usage ;;
+  -*) usage; exit 2 ;;
+  *) require_root; setup_logging; lock; deploy "$1" ;;
+esac

@@ -33,7 +33,9 @@
     "build:mcpb": "node scripts/build-mcpb.mjs",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "set-version": "node scripts/set-version.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "sync:plugin": "node scripts/sync-plugin.mjs",
+    "check:plugin": "node scripts/sync-plugin.mjs --check"
   },
   "keywords": [
     "mcp",

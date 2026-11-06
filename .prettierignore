@@ -9,3 +9,5 @@ package-lock.json
 *.md
 # Sample projects are data for the tests.
 test/fixtures/
+# The plugin skill is a byte-for-byte copy of kit/ (scripts/sync-plugin.mjs).
+plugins/
