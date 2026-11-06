@@ -7,3 +7,5 @@ node_modules/
 package-lock.json
 # Markdown is hand-formatted (wide tables).
 *.md
+# Sample projects are data for the tests.
+test/fixtures/

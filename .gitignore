@@ -9,3 +9,6 @@
 .env
 .env.*
 !.env.example
+# Test fixtures hold fake env files on purpose (the tests prove they are never read).
+!test/fixtures/**/.env
+!test/fixtures/**/.env.*

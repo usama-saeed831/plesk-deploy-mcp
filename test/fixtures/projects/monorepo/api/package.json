@@ -1,0 +1,1 @@
+{"name":"acme-api","scripts":{"build":"nest build","start:prod":"node dist/main.js","migration:run":"typeorm migration:run -d dist/data-source.js","migration:revert":"typeorm migration:revert -d dist/data-source.js"},"dependencies":{"@nestjs/core":"^11.0.0","@nestjs/schedule":"^5.0.0","typeorm":"^0.3.20","pg":"^8.11.0","bcrypt":"^5.1.1","ioredis":"^5.4.0"}}

@@ -13,6 +13,32 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
+export interface ToolCall<S = Record<string, unknown>> {
+  text: string;
+  structured: S;
+  isError: boolean;
+  raw: unknown;
+}
+
+/** Calls a tool and returns its text, structured content and error flag. */
+export async function call<S = Record<string, unknown>>(
+  client: Client,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<ToolCall<S>> {
+  const result = (await client.callTool({ name, arguments: args })) as {
+    content?: { type: string; text?: string }[];
+    structuredContent?: S;
+    isError?: boolean;
+  };
+  return {
+    text: (result.content ?? []).map((c) => c.text ?? '').join('\n'),
+    structured: (result.structuredContent ?? {}) as S,
+    isError: result.isError === true,
+    raw: result,
+  };
+}
+
 /**
  * A client connected to a fresh server through serveStdio (the production
  * entry point), over an in-memory transport.
