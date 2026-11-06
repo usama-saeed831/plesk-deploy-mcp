@@ -7,3 +7,4 @@ test/fixtures/bin/* text eol=lf
 test/fixtures/** text eol=lf
 mcpb/icon.png binary
 plugins/** text eol=lf
+LICENSE text eol=lf
