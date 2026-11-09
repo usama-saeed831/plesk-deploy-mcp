@@ -1,6 +1,9 @@
 # plesk-deploy-mcp
 
 [![CI](https://github.com/usama-saeed831/plesk-deploy-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/usama-saeed831/plesk-deploy-mcp/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/plesk-deploy-mcp)](https://www.npmjs.com/package/plesk-deploy-mcp)
+[![MCP Registry](https://img.shields.io/badge/MCP_Registry-listed-2f6feb)](https://registry.modelcontextprotocol.io/v0.1/servers/io.github.usama-saeed831%2Fplesk-deploy-mcp/versions/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 An MCP server that helps any AI agent (Claude Code, Claude Desktop, Cursor, VS Code and others) set up and run **safe deployments to Plesk servers**. Deploys work like this:
 
